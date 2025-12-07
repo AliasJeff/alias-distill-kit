@@ -1,0 +1,13 @@
+accelerate==1.6.0
+datasets
+safetensors
+transformers==4.51.3
+trl
+hf_transfer
+sacrebleu
+gradio>=4.0.0
+
+# Development and linting tools
+yapf==0.40.2
+flake8==6.1.0
+pre-commit==3.5.0
