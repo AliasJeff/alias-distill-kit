@@ -72,6 +72,7 @@ checkpoints/
 outputs/
 logs/
 *.log
+test_results*
 
 # Dataset
 dataset_cache/
