@@ -77,7 +77,7 @@ def generate_response(
     message: str,
     history: list,
     model_type: str,
-    max_new_tokens: int = 1024,
+    max_new_tokens: int = 512,
     temperature: float = 0.7,
     top_p: float = 0.9,
 ):

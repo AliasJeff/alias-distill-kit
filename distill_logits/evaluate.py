@@ -207,7 +207,7 @@ def generate_predictions(model, tokenizer, dataset, max_samples=100, batch_size=
 
             generated_ids = model.generate(
                 **inputs,
-                max_new_tokens=1024,
+                max_new_tokens=512,
                 num_beams=1,
                 do_sample=False,
                 pad_token_id=tokenizer.eos_token_id,
