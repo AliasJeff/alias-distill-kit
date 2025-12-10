@@ -116,11 +116,11 @@ python main.py train --evaluate
 python main.py train --evaluate --generate-samples --num-samples 5
 
 # Train in background
-nohup python distil_logits.py > distill.log 2>&1 &
+nohup python distill.py > distill.log 2>&1 &
 # Check logs
 tail -f distill.log
 # Check process
-ps -ef | grep distil_logits.py
+ps -ef | grep distill.py
 ```
 
 ### 2. Evaluate Models
@@ -341,7 +341,7 @@ distill_logits/
 ├── main.py                 # Main entry point with CLI
 ├── config.py               # Configuration settings
 ├── train_teacher.py        # Teacher model training script
-├── distil_logits.py        # Student model training with knowledge distillation
+├── distill.py        # Student model training with knowledge distillation
 ├── evaluate.py             # Evaluation functions (perplexity, BLEU, F1)
 ├── data_processing.py      # Dataset loading and preprocessing
 ├── requirements.txt        # Python dependencies
