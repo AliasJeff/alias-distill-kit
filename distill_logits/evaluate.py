@@ -224,7 +224,6 @@ def generate_predictions(model, tokenizer, dataset, max_samples=100, batch_size=
                 predictions.append(pred_text)
                 references.append(refs[idx])
 
-                # 每处理一条样本就更新 tqdm
                 pbar.update(1)
 
     pbar.close()
