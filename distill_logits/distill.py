@@ -31,6 +31,73 @@ def freeze_student_spectrum(model, unfrozen_layers_file, logger):
     logger.info(f"Froze layers based on spectrum configuration: {unfrozen_layers_file}")
 
 
+class MultiLayerAdaptationLayer(torch.nn.Module):
+    """Multi-layer adaptation layer for hidden state distillation.
+    
+    Projects student hidden states to teacher hidden state dimensions
+    with layer-wise mapping between student and teacher layers.
+    """
+
+    def __init__(self,
+                 student_dim,
+                 teacher_dim,
+                 num_student_layers,
+                 num_teacher_layers,
+                 dtype=torch.bfloat16):
+        """Initialize adaptation layer with projection modules.
+        
+        Args:
+            student_dim: Hidden dimension of student model
+            teacher_dim: Hidden dimension of teacher model
+            num_student_layers: Number of student transformer layers
+            num_teacher_layers: Number of teacher transformer layers
+            dtype: Data type for projections (default: bfloat16)
+        """
+        super().__init__()
+        # Create linear projections for each student layer
+        self.projections = torch.nn.ModuleList([
+            torch.nn.Linear(student_dim, teacher_dim, dtype=dtype)
+            for _ in range(num_student_layers)
+        ])
+        # Create mapping from student layer indices to teacher layer indices
+        self.layer_mapping = self.create_layer_mapping(num_student_layers, num_teacher_layers)
+        self.dtype = dtype
+
+    def create_layer_mapping(self, num_student_layers, num_teacher_layers):
+        """Create proportional layer mapping between student and teacher models.
+        
+        Maps each student layer to the nearest teacher layer based on relative position.
+        
+        Args:
+            num_student_layers: Number of student layers
+            num_teacher_layers: Number of teacher layers
+            
+        Returns:
+            Dictionary mapping student layer indices to teacher layer indices
+        """
+        return {
+            i: round(i * (num_teacher_layers - 1) / (num_student_layers - 1))
+            for i in range(num_student_layers)
+        }
+
+    def forward(self, student_hidden_states):
+        """Project student hidden states to teacher dimensions.
+        
+        Args:
+            student_hidden_states: List of hidden states from student model layers
+            
+        Returns:
+            List of projected hidden states matching teacher dimensions
+        """
+        adapted_hidden_states = []
+        for i, hidden_state in enumerate(student_hidden_states):
+            if i >= len(self.projections):
+                break
+            # Project student hidden state to teacher dimension
+            adapted_hidden_states.append(self.projections[i](hidden_state.to(self.dtype)))
+        return adapted_hidden_states
+
+
 class PeriodicTestCallback(TrainerCallback):
     """Callback to run periodic test evaluation during training."""
 
@@ -154,9 +221,20 @@ def pad_logits(student_logits, teacher_logits):
 
 
 class LogitsTrainer(SFTTrainer):
-    """Custom trainer for logits-based knowledge distillation."""
+    """Custom trainer for combined logits and hidden state knowledge distillation."""
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        """Compute combined distillation loss from logits and hidden states.
+        
+        Args:
+            model: Student model
+            inputs: Input batch
+            return_outputs: Whether to return model outputs
+            num_items_in_batch: Number of items in batch
+            
+        Returns:
+            Loss value or tuple of (loss, outputs) if return_outputs=True
+        """
         device = next(model.parameters()).device
         inputs = {k: v.to(device) if hasattr(v, 'to') else v for k, v in inputs.items()}
         self.teacher_model = self.teacher_model.to(device)
@@ -165,30 +243,120 @@ class LogitsTrainer(SFTTrainer):
         teacher_model = self.teacher_model.module if hasattr(self.teacher_model,
                                                              'module') else self.teacher_model
 
-        student_outputs = student_model(**inputs)
+        # Get student outputs with hidden states for hidden state distillation
+        student_outputs = student_model(**inputs, output_hidden_states=True)
         with torch.no_grad():
-            teacher_outputs = teacher_model(**inputs)
+            # Get teacher outputs with hidden states
+            teacher_outputs = teacher_model(**inputs, output_hidden_states=True)
 
-        custom_loss = self.distillation_loss(model, student_outputs.logits, teacher_outputs.logits,
-                                             inputs, student_outputs.loss)
+        custom_loss = self.distillation_loss(model, student_outputs, teacher_outputs, inputs,
+                                             student_outputs.loss)
         return (custom_loss, student_outputs) if return_outputs else custom_loss
 
-    def distillation_loss(self, model, student_logits, teacher_logits, inputs, original_loss):
+    def distillation_loss(self, model, student_outputs, teacher_outputs, inputs, original_loss):
+        """Compute combined logits and hidden state distillation loss.
+        
+        Combines:
+        1. Logits-based KL divergence loss
+        2. Hidden state-based distillation loss (if adaptation layer is available)
+        
+        Args:
+            model: Student model
+            student_outputs: Student model outputs including logits and hidden states
+            teacher_outputs: Teacher model outputs including logits and hidden states
+            inputs: Input batch
+            original_loss: Original task loss from student model
+            
+        Returns:
+            Combined distillation loss
+        """
         device = next(model.parameters()).device
-        student_logits, teacher_logits = pad_logits(student_logits.to(device),
-                                                    teacher_logits.to(device))
+
+        # Compute logits distillation loss
+        student_logits, teacher_logits = pad_logits(student_outputs.logits.to(device),
+                                                    teacher_outputs.logits.to(device))
 
         student_logits_scaled = student_logits / self.config_dict["distillation"]["temperature"]
         teacher_logits_scaled = teacher_logits / self.config_dict["distillation"]["temperature"]
 
-        loss_kd = F.kl_div(
+        loss_logits = F.kl_div(
             F.log_softmax(student_logits_scaled, dim=-1),
             F.softmax(teacher_logits_scaled, dim=-1),
             reduction='batchmean') * (self.config_dict["distillation"]["temperature"]**
                                       2) / self.config_dict["tokenizer"]["max_length"]
 
-        return self.config_dict["distillation"]["alpha"] * loss_kd + (
+        # Compute hidden state distillation loss if adaptation layer is available
+        loss_hidden = 0
+        if hasattr(self, 'adaptation_layer') and self.adaptation_layer is not None:
+            loss_hidden = self._compute_hidden_state_loss(student_outputs, teacher_outputs)
+
+        # Combine logits loss with hidden state loss
+        distillation_weight = self.config_dict["distillation"].get("distillation_weight", 1.0)
+        hidden_weight = self.config_dict["distillation"].get("hidden_weight", 0.5)
+
+        combined_kd_loss = distillation_weight * loss_logits + hidden_weight * loss_hidden
+
+        # Combine with original task loss using alpha parameter
+        return self.config_dict["distillation"]["alpha"] * combined_kd_loss + (
             1 - self.config_dict["distillation"]["alpha"]) * original_loss
+
+    def _compute_hidden_state_loss(self, student_outputs, teacher_outputs):
+        """Compute hidden state distillation loss using adaptation layer.
+        
+        Projects student hidden states to teacher dimensions and computes
+        KL divergence loss for each mapped layer pair.
+        
+        Args:
+            student_outputs: Student model outputs with hidden states
+            teacher_outputs: Teacher model outputs with hidden states
+            
+        Returns:
+            Averaged hidden state distillation loss
+        """
+        student_hidden_states = student_outputs.hidden_states
+        teacher_hidden_states = teacher_outputs.hidden_states
+
+        # Move adaptation layer to correct device
+        device = student_hidden_states[0].device
+        self.adaptation_layer = self.adaptation_layer.to(device)
+
+        # Project student hidden states to teacher dimensions
+        adapted_student_hidden_states = self.adaptation_layer(student_hidden_states)
+
+        total_loss_kd = 0
+        num_layers = 0
+
+        # Compute KL divergence loss for each student-teacher layer pair
+        for student_idx, teacher_idx in self.adaptation_layer.layer_mapping.items():
+            if student_idx >= len(adapted_student_hidden_states):
+                break
+
+            student_hidden = adapted_student_hidden_states[student_idx]
+            teacher_hidden = teacher_hidden_states[teacher_idx]
+
+            # Verify shape compatibility
+            if student_hidden.shape != teacher_hidden.shape:
+                raise ValueError(
+                    f"Shape mismatch: student {student_hidden.shape} vs teacher {teacher_hidden.shape}"
+                )
+
+            # Compute KL divergence with temperature scaling
+            temperature = self.config_dict["distillation"]["temperature"]
+            loss_kd = F.kl_div(F.log_softmax(student_hidden / temperature, dim=-1),
+                               F.softmax(teacher_hidden / temperature, dim=-1),
+                               reduction='batchmean') * (temperature**2)
+
+            total_loss_kd += loss_kd
+            num_layers += 1
+
+        # Average loss across all layer pairs and normalize by hidden dimension
+        if num_layers > 0:
+            avg_loss_kd = total_loss_kd / num_layers
+            hidden_dim = adapted_student_hidden_states[0].size(-1)
+            scaled_loss_kd = avg_loss_kd / hidden_dim
+            return scaled_loss_kd
+
+        return torch.tensor(0.0, device=device)
 
 
 def main():
@@ -206,7 +374,6 @@ def main():
     logger.info(
         f"Loading tokenizers: teacher={config['models']['teacher']}, student={config['models']['student']}"
     )
-    teacher_tokenizer = AutoTokenizer.from_pretrained(config["models"]["teacher"])
     student_tokenizer = AutoTokenizer.from_pretrained(config["models"]["student"])
 
     # Apply chat template to student tokenizer
@@ -243,6 +410,16 @@ def main():
         logger.info(
             "Spectrum configuration not found. All layers of the student model will be trainable.")
 
+    # Create adaptation layer for hidden state distillation
+    logger.info("Creating multi-layer adaptation layer for hidden state distillation...")
+    adaptation_layer = MultiLayerAdaptationLayer(
+        student_dim=student_model.config.hidden_size,
+        teacher_dim=teacher_model.config.hidden_size,
+        num_student_layers=student_model.config.num_hidden_layers,
+        num_teacher_layers=teacher_model.config.num_hidden_layers,
+        dtype=torch.bfloat16)
+    logger.info(f"Adaptation layer created with {len(adaptation_layer.projections)} projections")
+
     # Training arguments
     logger.info("Setting up training arguments...")
     training_arguments = TrainingArguments(**config["training"])
@@ -262,6 +439,9 @@ def main():
     # Add the teacher model to the trainer
     trainer.teacher_model = teacher_model
 
+    # Add the adaptation layer to the trainer for hidden state distillation
+    trainer.adaptation_layer = adaptation_layer
+
     # Add periodic test evaluation callback
     eval_steps = config["training"].get("eval_steps", 500)
     test_callback = PeriodicTestCallback(test_dataset=test_dataset,
@@ -278,6 +458,12 @@ def main():
     # Save the final model
     logger.info(f"Saving model to {config['training']['output_dir']}")
     trainer.save_model(config["training"]["output_dir"])
+
+    # Save the adaptation layer for hidden state distillation
+    adaptation_layer_path = os.path.join(config["training"]["output_dir"], "adaptation_layer.pth")
+    logger.info(f"Saving adaptation layer to {adaptation_layer_path}")
+    torch.save(adaptation_layer.state_dict(), adaptation_layer_path)
+
     logger.info("Training completed successfully!")
 
     # Push to HuggingFace Hub if configured

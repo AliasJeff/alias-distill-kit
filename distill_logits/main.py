@@ -5,7 +5,7 @@ import logging
 import sys
 
 from config import CONFIG
-from distil_logits import main as train_main
+from distill import main as train_main
 from train_teacher import main as train_teacher_main
 from evaluate import evaluate_models
 
@@ -105,7 +105,10 @@ Examples:
     test_parser.add_argument('--output-file', type=str, help='Save test results to file')
 
     # Gradio command
-    gradio_parser = subparsers.add_parser('gradio', help='Launch Gradio web interface')
+    gradio_parser = subparsers.add_parser(  # noqa: F841
+        'gradio',
+        help='Launch Gradio web interface',
+    )
 
     return parser
 
