@@ -306,7 +306,7 @@ def test_model_outputs(  # noqa: C901
     # Generate default output filename if not provided
     if not output_file:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = f"test_results_{timestamp}.json"
+        output_file = f"../results_output/test_results_{timestamp}.json"
 
     test_results = {
         "timestamp": datetime.now().isoformat(),
