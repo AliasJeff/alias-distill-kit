@@ -1,175 +1,252 @@
-# DistillKit
+# alias-distill-kit
 
-[Technical Report](https://arcee-ai-distillkit.my.canva.site/)
-
+Comprehensive knowledge distillation framework for training efficient student models using combined logits and hidden state distillation from teacher models.
 
 ## Overview
 
-DistillKit is an open-source research effort in model distillation by Arcee.AI. Our goal is to provide the community with easy-to-use tools for researching, exploring, and enhancing the adoption of open-source Large Language Model (LLM) distillation methods. This release focuses on practical, effective techniques for improving model performance and efficiency.
+alias-distill-kit is a comprehensive knowledge distillation toolkit that enables you to:
+- Train efficient student models by distilling knowledge from larger teacher models
+- Use combined logits and hidden state KL-divergence loss for effective knowledge transfer
+- Evaluate model performance with multiple metrics (perplexity, BLEU, F1)
+- Generate and test model outputs
+- Compare original and distilled models
 
 ## Features
 
-- Logit-based Distillation (models must be the same architecture)
-- Hidden States-based Distillation (models can be different architectures)
-- Support for Supervised Fine-Tuning (SFT) - DPO and CPT to come at a later date.
-
+- **Dual-Level Knowledge Distillation**: Combines logits-based and hidden state-based KL-divergence loss with configurable weights
+- **Multi-Layer Adaptation**: Proportional layer mapping between student and teacher models with learnable projections
+- **Flexible Model Support**: Works with any HuggingFace transformer model with different architectures
+- **Comprehensive Evaluation**: Computes perplexity, BLEU scores, and F1 scores
+- **Model Comparison**: Compare original and distilled models side-by-side
+- **Performance Testing**: Generate outputs and measure generation speed
+- **Configurable Training**: Supports flash attention, mixed precision, gradient accumulation, and more
 
 ## Installation
 
-### Quick Install
-
-For a quick and easy installation, you can use our setup script:
-
 ```bash
-./setup.sh
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-### Manual Installation
-
-If you prefer to install dependencies manually, follow these steps:
-
-1. Install basic requirements:
-   ```bash
-   pip install torch wheel ninja packaging
-   ```
-
-2. Install Flash Attention:
-   ```bash
-   pip install flash-attn
-   ```
-
-3. Install DeepSpeed:
-   ```bash
-   pip install deepspeed
-   ```
-
-4. Install remaining requirements:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Requirements
+- Python 3.8+
+- PyTorch 2.0+
+- Transformers 4.30+
+- CUDA (recommended for GPU acceleration)
 
 ## Configuration
 
-For simplicity, we've set the config settings directly within the training script. You can customize the configuration as follows:
+Edit `config.py` to customize your training setup.
 
-```python
-config = {
-    "project_name": "distil-logits",
-    "dataset": {
-        "name": "mlabonne/FineTome-100k", # Only sharegpt format is currently supported.
-        "split": "train",
-        # "num_samples": , # You can pass a number here to limit the number of samples to use.
-        "seed": 42
-    },
-    "models": {
-        "teacher": "arcee-ai/Arcee-Spark",
-        "student": "Qwen/Qwen2-1.5B"
-    },
-    "tokenizer": {
-        "max_length": 4096,
-        "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n' }}{% endif %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
-    },
-    "training": {
-        "output_dir": "./results",
-        "num_train_epochs": 3,
-        "per_device_train_batch_size": 1,
-        "gradient_accumulation_steps": 8,
-        "save_steps": 1000,
-        "logging_steps": 1,
-        "learning_rate": 2e-5,
-        "weight_decay": 0.05,
-        "warmup_ratio": 0.1,
-        "lr_scheduler_type": "cosine",
-        "resume_from_checkpoint": None,  # Set to a path or True to resume from the latest checkpoint
-        "fp16": False,
-        "bf16": True
-    },
-    "distillation": {
-        "temperature": 2.0,
-        "alpha": 0.5
-    },
-    "model_config": {
-        "use_flash_attention": True
-    }
-    # "spectrum": {
-    #     "layers_to_unfreeze": "/workspace/spectrum/snr_results_Qwen-Qwen2-1.5B_unfrozenparameters_50percent.yaml" # You can pass a spectrum yaml file here to freeze layers identified by spectrum.
-    # }
-}
-```
+### Key Configuration Options
 
-### Chat Template
+- **Dataset**: Configure dataset name, language, and split
+- **Models**: Set teacher and student model paths
+- **Training**: Batch size, learning rate, epochs, evaluation frequency, etc.
+- **Distillation**: Temperature and alpha parameters for KD loss
+- **Hub**: Set `push_to_hub: true` to automatically upload trained models to HuggingFace Hub after training
 
-If you want to use a chat template other than chatml, copy it from the model's `tokenizer_config.json`, and replace the current `chat_template` entry in the configuration.
-
-### Spectrum Integration
-
-You can use Spectrum to increase speed (but not memory overhead). To enable Spectrum, uncomment the "spectrum" section in the configuration and provide the path to your Spectrum YAML file. Please note that further evaluations with Spectrum are TBD.
 
 ## Usage
 
-To launch DistillKit, use the following command:
+### 0. Train the Teacher Model (Optional)
+
+Train the teacher model first if you want to fine-tune it on your dataset:
 
 ```bash
-accelerate launch distil_logits.py
+# Basic teacher training
+python main.py train-teacher
+
+# Train teacher and evaluate
+python main.py train-teacher --evaluate
+
+# Full pipeline: train teacher, evaluate, and generate samples
+python main.py train-teacher --evaluate --generate-samples --num-samples 5
+
+# Train in background
+nohup python train_teacher.py > teacher_train.log 2>&1 &
+# Check logs
+tail -f teacher_train.log
+# Check process
+ps -ef | grep train_teacher.py
 ```
 
-You can replace `distil_logits.py` with whichever script you want to use.
+The trained teacher model will be saved to `results_teacher/`.
 
-### Advanced Configurations
-
-If you wish to use DeepSpeed, Fully Sharded Data Parallel (FSDP), or Megatron sharding, you can set up your configuration using:
+### 1. Train the Student Model (Knowledge Distillation)
 
 ```bash
-accelerate config
+# Basic training
+python main.py train
+
+# Train and evaluate
+python main.py train --evaluate
+
+# Full pipeline: train, evaluate, and generate samples
+python main.py train --evaluate --generate-samples --num-samples 5
+
+# Train in background
+nohup python distill.py > distill.log 2>&1 &
+# Check logs
+tail -f distill.log
+# Check process
+ps -ef | grep distill.py
 ```
 
-Follow the prompts to configure your desired setup.
+### 2. Evaluate Models
 
-### DeepSpeed Configurations
+Compute perplexity, BLEU, and F1 scores on test dataset:
 
-We provide sample DeepSpeed configuration files in the `./deepspeed_configs` directory. These configurations are shamelessly stolen from the Axolotl (thanks to Wing Lian and the Axolotl team for their excellent work!).
+```bash
+python main.py evaluate
+```
 
-To use a specific DeepSpeed configuration, you can specify it in your accelerate config.
+### 3. Test Model Outputs
 
-## Distillation Methods
+Generate outputs and measure performance metrics:
 
-DistillKit supports two primary distillation methods:
+```bash
+# Test the distilled model
+python main.py test
 
-1. **Logit-based Distillation**: This method transfers knowledge from a larger teacher model to a smaller student model by using both hard targets (actual labels) and soft targets (teacher logits). The soft target loss, computed using Kullback-Leibler (KL) divergence, encourages the student to mimic the teacher's output distribution. This method enhances the student model's generalization and efficiency while maintaining performance closer to the teacher model.
+# Test with comparison to original model
+python main.py test --compare-original
 
-2. **Hidden States-based Distillation**: This method involves transferring knowledge by aligning the intermediate layer representations of the student model with those of the teacher model. This process enhances the student's learning by providing richer, layer-wise guidance, improving its performance and generalization. This method allows for cross-architecture distillation, providing flexibility in model architecture choices.
+# Test with custom number of samples
+python main.py test --num-samples 3 --compare-original
 
-## Performance and Memory Requirements
+# Save results to file
+python main.py test --compare-original --output-file test_results.json
+```
 
-While the implementation of DistillKit is relatively straightforward, the memory requirements for distillation are higher compared to standard SFT. We are actively working on scaling DistillKit to support models larger than 70B parameters, which will involve advanced techniques and efficiency improvements.
+Test metrics include:
+- Output length (tokens)
+- Generation time per sample
+- Average generation time
+- Speedup ratio (when comparing models)
 
-## Experimental Results
+### 4. Generate Samples
 
-Our experiments have shown promising results in both general-purpose and domain-specific tasks. Key findings include:
+Generate text from the trained model:
 
-- Both logit-based and hidden states-based distillation methods show improvements over standard SFT across most benchmarks.
-- Significant performance gains were observed when distilling models for domain-specific tasks.
-- Using the same training dataset for distillation as was used for the teacher model can lead to higher performance gains.
+```bash
+# Generate with default prompts
+python main.py generate
 
-For detailed results and analysis, please refer to our case studies and experimental here.
+# Generate with custom prompts
+python main.py generate --prompts "What is AI?" "Explain machine learning"
 
-## Arcee-Labs
+# Generate more samples
+python main.py generate --num-samples 3
+```
 
-This release marks the debut of Arcee-Labs, a division of Arcee.ai dedicated to accelerating open-source research. Our mission is to rapidly deploy resources, models, and research findings to empower both Arcee and the wider community. In an era of increasingly frequent breakthroughs in LLM research, models, and techniques, we recognize the need for agility and adaptability. Through our efforts, we strive to significantly contribute to the advancement of open-source AI technology and support the community in keeping pace with these rapid developments.
+### 5. View Configuration
 
-## Future Directions
+Display or save the current configuration:
 
-We are excited to see how the community will use and improve DistillKit. Future releases will include Continued Pre-Training (CPT) and Direct Preference Optimization (DPO) distillation methods. We welcome community contributions in the form of new distillation methods, training routine improvements, and memory optimizations.
+```bash
+# Display configuration
+python main.py config
 
-## Contributing
+# Save configuration to file
+python main.py config --save config_backup.json
+```
 
-We welcome contributions from the community! If you have ideas for improvements, new features, or bug fixes, please feel free to open an issue or submit a pull request.
+### 6. Launch Web Interface
 
-## Contact
+Launch the Gradio web interface for interactive model comparison:
 
-For more information about Arcee.AI and our training platform, visit our website at [https://arcee.ai](https://arcee.ai).
+```bash
+python main.py gradio
+```
 
-For technical questions or support, please open an issue in this repository.
-## Acknowledgments
+## Project Structure
 
-While our work is ultimately quite different - this project was inspired by [Towards Cross-Tokenizer Distillation: the Universal Logit Distillation Loss for LLMs](https://arxiv.org/abs/2402.12030). We thank the authors for their efforts and contributions. We would like to thank the open-source community and all at arcee.ai who have helped make DistillKit possible. We're just getting started.
+```
+alias-distill-kit/
+├── src/
+│   ├── README.md                          # Documentation
+│   ├── config.py                          # Configuration settings
+│   ├── data_processing.py                 # Dataset loading and preprocessing
+│   ├── evaluate.py                        # Evaluation functions (perplexity, BLEU, F1)
+│   ├── requirements.txt                   # Python dependencies
+│   │
+│   ├── distill_logits/
+│   │   ├── main.py                        # Main entry point with CLI
+│   │   ├── train_teacher.py               # Teacher model training script (SFT)
+│   │   ├── distill.py                     # Combined logits + hidden state distillation trainer
+│   │   └── __init__.py
+│   │
+│   └── distill_hidden/
+│       ├── distil_hidden.py               # Hidden state distillation (reference implementation)
+│       └── __init__.py
+│
+├── results/                               # Student model training outputs
+│   ├── pytorch_model.bin                  # Trained student model
+│   ├── adaptation_layer.pth               # Trained adaptation layer weights
+│   └── training_logs/
+│
+├── results_teacher/                       # Teacher model training outputs
+│   ├── pytorch_model.bin                  # Trained teacher model
+│   └── training_logs/
+│
+└── .gitignore                             # Git ignore rules
+```
+
+### Key Directories
+
+- **src/**: Main source code directory
+  - **distill_logits/**: Combined logits and hidden state distillation implementation
+  - **distill_hidden/**: Reference hidden state distillation implementation
+- **results/**: Student model checkpoints and outputs
+- **results_teacher/**: Teacher model checkpoints and outputs
+
+## Training Details
+
+### Loss Function
+```
+Loss = α * [w_logits * KL_logits + w_hidden * KL_hidden] + (1-α) * CrossEntropy(student_logits, labels)
+```
+
+Where:
+- `α` (alpha): Balance between distillation and original loss (default: 0.5)
+- `w_logits` (distillation_weight): Weight for logits-based KL divergence (default: 1.0)
+- `w_hidden` (hidden_weight): Weight for hidden state-based KL divergence (default: 0.5)
+- `temperature`: Controls softness of probability distributions (default: 3.0)
+
+### Hidden State Distillation
+- Student hidden states are projected to teacher dimensions using `MultiLayerAdaptationLayer`
+- Each student layer is mapped to a proportional teacher layer based on relative position
+- KL divergence is computed for each student-teacher layer pair
+- Loss is averaged across all layer pairs and normalized by hidden dimension
+
+### Logits Distillation
+- KL divergence computed between temperature-scaled student and teacher logits
+- Logits are padded to match vocabulary sizes if needed
+- Loss is normalized by sequence length
+
+### Optimization
+- Optimizer: AdamW
+- Learning rate scheduler: Cosine annealing
+- Gradient accumulation: Supported
+- Mixed precision: BF16 support
+- Flash Attention 2: Optional for faster computation
+
+## Output Files
+
+### Teacher Model Training
+- `results_teacher/checkpoint-*/`: Teacher model checkpoints
+- `results_teacher/pytorch_model.bin`: Final trained teacher model
+- `results_teacher/training_logs/`: Training logs and metrics
+
+### Student Model Training
+- `results/checkpoint-*/`: Student model checkpoints
+- `results/pytorch_model.bin`: Final trained student model
+- `results/adaptation_layer.pth`: Trained adaptation layer weights for hidden state distillation
+- `results/training_logs/`: Training logs and metrics
+
+### Evaluation
+- `results/evaluation/evaluation_results_*.json`: Evaluation metrics and comparison
+
+### Testing
+- `test_results_*.json`: Test output metrics (auto-generated with timestamp if `--output-file` not specified)
