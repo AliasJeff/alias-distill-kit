@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import torch
 import math
 from datetime import datetime
@@ -206,21 +207,23 @@ def generate_predictions(model, tokenizer, dataset, max_samples=100, batch_size=
 
             generated_ids = model.generate(
                 **inputs,
-                max_new_tokens=256,
+                max_new_tokens=512,
                 num_beams=1,
                 do_sample=False,
                 pad_token_id=tokenizer.eos_token_id,
             )
 
             for idx in range(len(prompts)):
-                input_len = inputs.input_ids[idx].shape[0]
+                input_len = inputs["input_ids"][idx].shape[0]
                 gen = generated_ids[idx][input_len:]
                 pred_text = tokenizer.decode(gen, skip_special_tokens=True)
+
+                # Remove <think> tags and their content
+                pred_text = re.sub(r'<think>.*?</think>', '', pred_text, flags=re.DOTALL)
 
                 predictions.append(pred_text)
                 references.append(refs[idx])
 
-                # 每处理一条样本就更新 tqdm
                 pbar.update(1)
 
     pbar.close()

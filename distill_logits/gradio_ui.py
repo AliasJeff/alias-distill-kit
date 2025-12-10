@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 MODELS: Dict[str, Optional[tuple]] = {
     "teacher_origin": None,
     "teacher": None,
+    "xformai-india/qwen3-1.7b-medicaldataset": None,
     "student": None,
     "distilled_student": None
 }
@@ -76,7 +77,7 @@ def generate_response(
     message: str,
     history: list,
     model_type: str,
-    max_new_tokens: int = 256,
+    max_new_tokens: int = 512,
     temperature: float = 0.7,
     top_p: float = 0.9,
 ):
@@ -119,7 +120,7 @@ def generate_response(
         )
 
     # Decode the response
-    response = tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+    response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
     generation_time = time.time() - start_time
 
     # Add generation time to the response
@@ -145,8 +146,8 @@ def chat_with_model(
         top_p=top_p,
     )
     # Add the user message and response to history in Gradio's expected format
-    history.append({"role": "user", "content": message})
-    history.append({"role": "assistant", "content": response})
+    history = history or []
+    history.append([message, response])
     return "", history
 
 
@@ -162,9 +163,16 @@ def create_gradio_interface() -> gr.Blocks:
             with gr.Column(scale=1):
                 gr.Markdown("### Model Selection")
                 model_selector = gr.Dropdown(
-                    choices=["Teacher Origin", "Teacher", "Student", "Distilled Student"],
+                    choices=[
+                        "Teacher Origin",
+                        "Teacher",
+                        "XformAI-india/Qwen3-1.7B-medicaldataset",
+                        "Student",
+                        "Distilled Student",
+                    ],
                     value="Distilled Student",
-                    label="Select Model")
+                    label="Select Model",
+                )
 
                 gr.Markdown("### Generation Parameters")
                 max_tokens = gr.Slider(minimum=10,
@@ -191,7 +199,7 @@ def create_gradio_interface() -> gr.Blocks:
             with gr.Column(scale=2):
                 chatbot = gr.Chatbot(height=600, label="Chat with the selected model")
                 msg = gr.Textbox(placeholder="Type your message here...", label="Your Message")
-                clear = gr.ClearButton([msg, chatbot])
+                clear = gr.ClearButton([msg, chatbot])  # noqa: F841
 
         def load_model_ui(model_name: str) -> str:
             """Load the selected model and update status."""
@@ -200,8 +208,10 @@ def create_gradio_interface() -> gr.Blocks:
 
                 if model_type == "distilled_student":
                     model_path = "./results"
+                elif model_type == "xformai-india/qwen3-1.7b-medicaldataset":
+                    model_path = "XformAI-india/Qwen3-1.7B-medicaldataset"
                 else:
-                    model_path = CONFIG["models"][model_type]
+                    model_path = CONFIG["models"].get(model_type)
                 if not model_path:
                     return f"Error: No path configured for {model_name}"
 
@@ -223,13 +233,14 @@ def create_gradio_interface() -> gr.Blocks:
                    outputs=[msg, chatbot])
 
         # Add some example prompts
-        examples = gr.Examples(examples=[
-            "Explain the concept of knowledge distillation in simple terms.",
-            "What are the main differences between the teacher and student models?",
-            "Can you summarize how this model was trained?"
-        ],
-                               inputs=msg,
-                               label="Example Prompts")
+        examples = gr.Examples(  # noqa: F841
+            examples=[
+                "Explain the concept of knowledge distillation in simple terms.",
+                "What are the main differences between the teacher and student models?",
+                "Can you summarize how this model was trained?"
+            ],
+            inputs=msg,
+            label="Example Prompts")
 
     return demo
 

@@ -99,7 +99,7 @@ class PeriodicTestCallback(TrainerCallback):
                                 add_generation_prompt=True,
                             )
                             gen_inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-                            gen_output = model.generate(**gen_inputs, max_new_tokens=256)
+                            gen_output = model.generate(**gen_inputs, max_new_tokens=512)
                             decoded_gen = tokenizer.decode(gen_output[0], skip_special_tokens=True)
                             logger.info(f"\nModel Output:\n{decoded_gen}")
                         except Exception as ge:

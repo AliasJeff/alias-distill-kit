@@ -243,7 +243,7 @@ def generate_samples(config, num_samples=5, prompts=None):
 
                 inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
                 generated_ids = model.generate(**inputs,
-                                               max_new_tokens=256,
+                                               max_new_tokens=512,
                                                num_beams=1,
                                                temperature=0.7,
                                                top_p=0.9,
@@ -252,7 +252,7 @@ def generate_samples(config, num_samples=5, prompts=None):
                                                pad_token_id=tokenizer.eos_token_id)
 
                 # Decode only the generated part
-                generated_text = tokenizer.decode(generated_ids[0][inputs.input_ids.shape[1]:],
+                generated_text = tokenizer.decode(generated_ids[0][inputs["input_ids"].shape[1]:],
                                                   skip_special_tokens=True)
                 logger.info(f"Output: {generated_text}\n")
 
@@ -357,7 +357,7 @@ def test_model_outputs(  # noqa: C901
 
                     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
                     generated_ids = model.generate(**inputs,
-                                                   max_new_tokens=256,
+                                                   max_new_tokens=512,
                                                    num_beams=1,
                                                    temperature=0.7,
                                                    top_p=0.9,
@@ -369,8 +369,8 @@ def test_model_outputs(  # noqa: C901
                     total_time += elapsed_time
 
                     # Decode only the generated part
-                    generated_text = tokenizer.decode(generated_ids[0][inputs.input_ids.shape[1]:],
-                                                      skip_special_tokens=True)
+                    generated_text = tokenizer.decode(
+                        generated_ids[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
 
                     output_info = {
                         "question": question,
