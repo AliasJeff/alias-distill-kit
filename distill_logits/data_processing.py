@@ -46,13 +46,22 @@ def sharegpt_format(example, student_tokenizer, config):
 def freedom_intelligence_format(example, student_tokenizer, config, mode="train"):
     """Convert FreedomIntelligence format to chat template format using apply_chat_template."""
     # Question, Complex_CoT, Response
-    messages = [{
-        "role": "user",
-        "content": example['Question']
-    }, {
-        "role": "assistant",
-        "content": example['Response']
-    }]
+    messages = [
+        {
+            "role": "user",
+            "content": example['Question']
+        },
+        {
+            "role":
+            "system",
+            "content":
+            "You are a helpful assistant, you must never output <think> or </think> tags or any content within those tags, always provide a clear analysis and the final answer."
+        },
+        {
+            "role": "assistant",
+            "content": example['Response']
+        },
+    ]
 
     text = student_tokenizer.apply_chat_template(messages,
                                                  tokenize=False,
@@ -142,7 +151,6 @@ def prepare_dataset(dataset, student_tokenizer, config, mode="train"):
     )
 
     # Save splits locally
-    cache_dir = get_dataset_cache_dir(config)
     train_path = get_split_cache_path(config, "train")
     test_path = get_split_cache_path(config, "test")
 
