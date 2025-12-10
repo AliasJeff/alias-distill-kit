@@ -148,7 +148,7 @@ def chat_with_model(
     # Add the user message and response to history in Gradio's expected format
     history = history or []
     history.append([message, response])
-    return history, history
+    return "", history
 
 
 def create_gradio_interface() -> gr.Blocks:
@@ -199,7 +199,7 @@ def create_gradio_interface() -> gr.Blocks:
             with gr.Column(scale=2):
                 chatbot = gr.Chatbot(height=600, label="Chat with the selected model")
                 msg = gr.Textbox(placeholder="Type your message here...", label="Your Message")
-                clear = gr.ClearButton([msg, chatbot])
+                clear = gr.ClearButton([msg, chatbot])  # noqa: F841
 
         def load_model_ui(model_name: str) -> str:
             """Load the selected model and update status."""
@@ -233,13 +233,14 @@ def create_gradio_interface() -> gr.Blocks:
                    outputs=[msg, chatbot])
 
         # Add some example prompts
-        examples = gr.Examples(examples=[
-            "Explain the concept of knowledge distillation in simple terms.",
-            "What are the main differences between the teacher and student models?",
-            "Can you summarize how this model was trained?"
-        ],
-                               inputs=msg,
-                               label="Example Prompts")
+        examples = gr.Examples(  # noqa: F841
+            examples=[
+                "Explain the concept of knowledge distillation in simple terms.",
+                "What are the main differences between the teacher and student models?",
+                "Can you summarize how this model was trained?"
+            ],
+            inputs=msg,
+            label="Example Prompts")
 
     return demo
 
