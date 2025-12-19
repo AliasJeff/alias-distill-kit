@@ -73,24 +73,36 @@ ps -ef | grep train_teacher.py
 
 The trained teacher model will be saved to `results_teacher/`.
 
-### 1. Train the Student Model (Knowledge Distillation)
+### 1. Distill the Student Model (Knowledge Distillation)
 
 ```bash
-# Basic training
-python main.py train
+# Basic distillation
+python main.py distill
 
-# Train and evaluate
-python main.py train --evaluate
+# Distill and evaluate
+python main.py distill --evaluate
 
-# Full pipeline: train, evaluate, and generate samples
-python main.py train --evaluate --generate-samples --num-samples 5
+# Full pipeline: distill, evaluate, and generate samples
+python main.py distill --evaluate --generate-samples --num-samples 5
 
-# Train in background
-nohup python distill.py > distill.log 2>&1 &
+# Distill in background
+nohup python -u -m src.distill > distill.log 2>&1 &
 # Check logs
 tail -f distill.log
 # Check process
 ps -ef | grep distill.py
+```
+
+### 1a. Run Full Pipeline
+
+Run the entire pipeline, which includes training the teacher model, distilling the student model, and running evaluation.
+
+```bash
+# Run the full pipeline
+python main.py all
+
+# Run the full pipeline and generate samples at the end
+python main.py all --generate-samples --num-samples 5
 ```
 
 ### 2. Evaluate Models
