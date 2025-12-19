@@ -4,10 +4,10 @@ import argparse
 import logging
 import sys
 
-from config import CONFIG
-from distill import main as train_main
-from train_teacher import main as train_teacher_main
-from evaluate import evaluate_models
+from src.config import CONFIG
+from src.distill import main as distill_main
+from src.train_teacher import main as train_teacher_main
+from src.evaluate import evaluate_models
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -163,7 +163,7 @@ def train_command(args):
 
     try:
         # Run training
-        train_main()
+        distill_main()
         logger.info("Training completed successfully!")
 
         # Run evaluation if requested
@@ -204,7 +204,7 @@ def config_command(args):
 def generate_samples(config, num_samples=5, prompts=None):
     """Generate sample outputs from the trained model."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    from data_processing import load_dataset_split
+    from src.data_processing import load_dataset_split
     import torch
     import random
 
@@ -297,7 +297,7 @@ def test_model_outputs(  # noqa: C901
     import torch
     import json
     from datetime import datetime
-    from data_processing import load_dataset_split
+    from src.data_processing import load_dataset_split
 
     logger.info("\n" + "=" * 70)
     logger.info("MODEL OUTPUT TEST")
@@ -306,7 +306,7 @@ def test_model_outputs(  # noqa: C901
     # Generate default output filename if not provided
     if not output_file:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = f"../results_output/test_results_{timestamp}.json"
+        output_file = f"results_output/test_results_{timestamp}.json"
 
     test_results = {
         "timestamp": datetime.now().isoformat(),
@@ -495,7 +495,7 @@ def gradio_command(args):
     """Launch the Gradio web interface."""
     logger.info("Launching Gradio web interface for model comparison...")
     try:
-        from gradio_ui import main as gradio_main
+        from src.gradio_ui import main as gradio_main
         gradio_main()
     except ImportError as e:
         logger.error("Could not import Gradio. Please install it with 'pip install gradio'")

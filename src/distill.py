@@ -3,7 +3,7 @@ import logging
 import torch
 import torch.nn.functional as F
 from trl import SFTTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForLanguageModeling, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
 import yaml
 from datetime import datetime
@@ -388,6 +388,9 @@ def main():
     test_dataset = load_dataset_split(config, student_tokenizer, split="test")
     logger.info(f"Test dataset loaded with {len(test_dataset)} samples")
 
+    # Data collator
+    data_collator = DataCollatorForLanguageModeling(tokenizer=student_tokenizer, mlm=False)
+
     # Load models with configurable flash attention
     logger.info("Loading models...")
     model_kwargs = {"torch_dtype": torch.bfloat16}
@@ -431,6 +434,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=test_dataset,
         args=training_arguments,
+        data_collator=data_collator,
     )
 
     # Store config in trainer for access in loss computation

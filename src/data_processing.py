@@ -3,16 +3,26 @@
 import logging
 import os
 from pathlib import Path
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 
 logger = logging.getLogger(__name__)
 
 
 def load_and_preprocess_dataset(config):
     """Load and preprocess dataset from configuration."""
-    dataset = load_dataset(config["dataset"]["name"],
-                           config["dataset"]["lang"],
-                           split=config["dataset"]["split"])
+    if type(config["dataset"]["split"]) is str:
+        dataset = load_dataset(config["dataset"]["name"],
+                               config["dataset"]["subset"],
+                               split=config["dataset"]["split"])
+    elif type(config["dataset"]["split"]) is list:
+        splits = []
+
+        for split in config["dataset"]["split"]:
+            splits.append(
+                load_dataset(config["dataset"]["name"], config["dataset"]["subset"], split=split))
+
+        dataset = concatenate_datasets(splits)
+
     dataset = dataset.shuffle(seed=config["dataset"]["seed"])
     if "num_samples" in config["dataset"]:
         dataset = dataset.select(range(config["dataset"]["num_samples"]))
@@ -71,12 +81,70 @@ def freedom_intelligence_format(example, student_tokenizer, config, mode="train"
     return {"text": text, "Question": example['Question'], "Response": example['Response']}
 
 
+def mbpp_format(example, tokenizer, config, mode="train"):
+    if mode == "train":
+        message = [
+            {
+                "role": "user",
+                "content": example['text']
+            },
+            {
+                "role": "assistant",
+                "content": example["code"]
+            },
+        ]
+        add_generation_prompt = False
+    else:
+        message = [{"role": "user", "content": example['text']}]
+        add_generation_prompt = True
+
+    text = tokenizer.apply_chat_template(
+        message,
+        tokenize=False,
+        add_generation_prompt=add_generation_prompt,
+    )
+
+    # Return formatted text along with original fields for later use
+    return {
+        "text": text,
+        "Question": example['text'],
+        "Response": example['code'],
+        "Test": example['test_list']
+    }
+
+
+def add_assistant_labels(example, tokenizer):
+    input_ids = example["input_ids"]
+    labels = [-100] * len(input_ids)
+
+    assistant_start_id = tokenizer.convert_tokens_to_ids("<|im_start|>assistant")
+    assistant_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+
+    in_assistant = False
+
+    for i, token_id in enumerate(input_ids):
+        if token_id == assistant_start_id:
+            in_assistant = True
+            continue
+
+        if token_id == assistant_end_id and in_assistant:
+            in_assistant = False
+            continue
+
+        if in_assistant:
+            labels[i] = token_id
+
+    example["labels"] = labels
+    return example
+
+
 def tokenize_function(examples, student_tokenizer, config):
-    """Tokenize text examples."""
-    return student_tokenizer(examples["text"],
-                             truncation=True,
-                             max_length=config["tokenizer"]["max_length"],
-                             padding="max_length")
+    return student_tokenizer(
+        examples["text"],
+        truncation=True,
+        max_length=config["tokenizer"]["max_length"],
+        padding=False,
+    )
 
 
 def get_dataset_cache_dir(config):
@@ -130,16 +198,23 @@ def prepare_dataset(dataset, student_tokenizer, config, mode="train"):
     logger.info("Formatting dataset with FreedomIntelligence format using apply_chat_template...")
 
     # Format dataset with apply_chat_template
-    dataset = dataset.map(lambda x: freedom_intelligence_format(x, student_tokenizer, config, mode),
-                          desc="Formatting FreedomIntelligence dataset")
+    dataset = dataset.map(lambda x: mbpp_format(x, student_tokenizer, config, mode),
+                          desc="Formatting mbpp dataset")
     logger.info("Dataset formatting complete")
 
     # Tokenize dataset
     logger.info("Tokenizing dataset...")
-    tokenized_dataset = dataset.map(lambda x: tokenize_function(x, student_tokenizer, config),
-                                    batched=True,
-                                    num_proc=8,
-                                    remove_columns=["text"])
+    tokenized_dataset = dataset.map(
+        lambda x: tokenize_function(x, student_tokenizer, config),
+        batched=True,
+        num_proc=8,
+        remove_columns=["text"],
+    )
+    tokenized_dataset = tokenized_dataset.map(
+        lambda x: add_assistant_labels(x, student_tokenizer),
+        num_proc=8,
+        desc="Adding assistant-only labels",
+    )
     logger.info("Tokenization complete")
 
     # Split into train and test

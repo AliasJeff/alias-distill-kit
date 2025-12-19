@@ -1,27 +1,37 @@
-"""Configuration for distill_logits training."""
+"""Configuration for distillation training."""
 
 CONFIG = {
-    "project_name": "distil-logits",
+    "project_name": "distillation",
     "dataset": {
-        "name": "FreedomIntelligence/medical-o1-reasoning-SFT",
-        "lang": "zh",
-        "split": "train",
+        "name": "google-research-datasets/mbpp",
+        "subset": "full",
+        "split": ["train", "test", "validation"],  # input a single string or a list of split names
         # "num_samples": , # You can pass a number here to limit the number of samples to use.
         "seed": 42
     },
     "models": {
         "teacher_origin": "Qwen/Qwen3-1.7B",
-        "teacher": "../results_teacher",
+        "teacher": "results_teacher",
         "student": "Qwen/Qwen3-0.6B"
     },
     "tokenizer": {
         "max_length":
         4096,
         "chat_template":
-        "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<|im_start|>system\nYou are a helpful assistant, you must never output <think> or </think> tags or any content within those tags, always provide a clear analysis and the final answer.<|im_end|>\n' }}{% endif %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
+        """
+        {% for message in messages %}
+            {% if loop.first and messages[0]['role'] != 'system' %}
+                {{ '<|im_start|>system\nYou are a helpful assistant, you MUST NOT reveal your chain-of-thought, MUST NOT output any reasoning or thinking process, you must never output <think> or </think> tags or any content within those tags, always ONLY provide the final answer.<|im_end|>\n' }}
+            {% endif %}
+            {{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}
+        {% endfor %}
+        {% if add_generation_prompt %}
+            {{ '<|im_start|>assistant\n' }}
+        {% endif %}
+        """
     },
     "training": {
-        "output_dir": "../results",
+        "output_dir": "results",
         "num_train_epochs": 3,
         "per_device_train_batch_size": 1,
         "gradient_accumulation_steps": 8,
