@@ -1,4 +1,4 @@
-"""Data processing utilities for distill_logits training."""
+"""Data processing utilities for distillation training."""
 
 import logging
 import os
@@ -74,14 +74,13 @@ def add_assistant_labels(example, tokenizer):
     for i, token_id in enumerate(input_ids):
         if token_id == assistant_start_id:
             in_assistant = True
-            continue
-
-        if token_id == assistant_end_id and in_assistant:
-            in_assistant = False
+            labels[i] = -100
             continue
 
         if in_assistant:
             labels[i] = token_id
+            if token_id == assistant_end_id:
+                in_assistant = False
 
     example["labels"] = labels
     return example
