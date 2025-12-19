@@ -103,6 +103,13 @@ python main.py all
 
 # Run the full pipeline and generate samples at the end
 python main.py all --generate-samples --num-samples 5
+
+# Run the full pipeline in background
+nohup python main.py all --generate-samples --num-samples 3 > all.log 2>&1 &
+# Check logs
+tail -f all.log
+# Check process
+ps -ef | grep main.py
 ```
 
 ### 2. Evaluate Models
