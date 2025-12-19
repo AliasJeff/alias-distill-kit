@@ -65,6 +65,7 @@ def add_assistant_labels(example, tokenizer):
     input_ids = example["input_ids"]
     labels = [-100] * len(input_ids)
 
+    # NOTE: only for Qwen model
     assistant_start_id = tokenizer.convert_tokens_to_ids("<|im_start|>assistant")
     assistant_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
 

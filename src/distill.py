@@ -276,7 +276,6 @@ class LogitsTrainer(SFTTrainer):
         """
         device = next(model.parameters()).device
         inputs = {k: v.to(device) if hasattr(v, 'to') else v for k, v in inputs.items()}
-        self.teacher_model = self.teacher_model.to(device)
 
         student_model = model.module if hasattr(model, 'module') else model
         teacher_model = self.teacher_model.module if hasattr(self.teacher_model,
@@ -321,16 +320,13 @@ class LogitsTrainer(SFTTrainer):
         labels = inputs["labels"]  # [B, T]
         mask = (labels != -100).unsqueeze(-1)  # [B, T, 1]
 
-        student_logits_masked = student_logits_scaled * mask
-        teacher_logits_masked = teacher_logits_scaled * mask
+        log_probs_student = F.log_softmax(student_logits_scaled, dim=-1)
+        probs_teacher = F.softmax(teacher_logits_scaled, dim=-1)
 
-        loss_logits = F.kl_div(
-            F.log_softmax(student_logits_masked, dim=-1),
-            F.softmax(teacher_logits_masked, dim=-1),
-            reduction="sum",
-        )
+        kl = F.kl_div(log_probs_student, probs_teacher, reduction="none")
 
-        loss_logits = loss_logits / mask.sum().clamp_min(1)
+        kl = kl * mask
+        loss_logits = kl.sum() / mask.sum().clamp_min(1)
 
         # Compute hidden state distillation loss if adaptation layer is available
         loss_hidden = 0
@@ -370,7 +366,7 @@ class LogitsTrainer(SFTTrainer):
         # Project student hidden states to teacher dimensions
         adapted_student_hidden_states = self.adaptation_layer(student_hidden_states)
 
-        total_loss_kd = 0
+        total_loss = 0
         num_layers = 0
 
         # Compute KL divergence loss for each student-teacher layer pair
@@ -387,21 +383,18 @@ class LogitsTrainer(SFTTrainer):
                     f"Shape mismatch: student {student_hidden.shape} vs teacher {teacher_hidden.shape}"
                 )
 
-            # Compute KL divergence with temperature scaling
-            temperature = self.config_dict["distillation"]["temperature"]
-            loss_kd = F.kl_div(F.log_softmax(student_hidden / temperature, dim=-1),
-                               F.softmax(teacher_hidden / temperature, dim=-1),
-                               reduction='batchmean') * (temperature**2)
+            # Compute MSE loss
+            loss = F.mse_loss(student_hidden, teacher_hidden)
 
-            total_loss_kd += loss_kd
+            total_loss += loss
             num_layers += 1
 
         # Average loss across all layer pairs and normalize by hidden dimension
         if num_layers > 0:
-            avg_loss_kd = total_loss_kd / num_layers
+            avg_loss = total_loss / num_layers
             hidden_dim = adapted_student_hidden_states[0].size(-1)
-            scaled_loss_kd = avg_loss_kd / hidden_dim
-            return scaled_loss_kd
+            scaled_loss = avg_loss / hidden_dim
+            return scaled_loss
 
         return torch.tensor(0.0, device=device)
 
@@ -494,7 +487,7 @@ def main():
     trainer.config_dict = config
 
     # Add the teacher model to the trainer
-    trainer.teacher_model = teacher_model
+    trainer.teacher_model = teacher_model.to(trainer.model.device)
 
     # Add the adaptation layer to the trainer for hidden state distillation
     trainer.adaptation_layer = adaptation_layer
