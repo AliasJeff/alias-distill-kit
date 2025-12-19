@@ -541,6 +541,14 @@ def evaluate_models(config):  # noqa: C901
     logger.info("EVALUATION SUMMARY")
     logger.info("=" * 80)
 
+    if "teacher_origin" in results["models"] and "error" not in results["models"]["teacher_origin"]:
+        logger.info("Original Teacher Model:")
+        logger.info(f"  - Perplexity: {results['models']['teacher_origin']['perplexity']:.4f}")
+        logger.info(f"  - F1 Score: {results['models']['teacher_origin']['f1_score']:.4f}")
+        logger.info(f"  - BLEU Score: {results['models']['teacher_origin']['bleu_score']:.4f}")
+        logger.info(f"  - Model Size: {results['models']['teacher_origin']['model_size_mb']:.2f}MB")
+        logger.info(f"  - Parameters: {results['models']['teacher_origin']['total_parameters']:,}")
+
     if "teacher" in results["models"] and "error" not in results["models"]["teacher"]:
         logger.info("Teacher Model:")
         logger.info(f"  - Perplexity: {results['models']['teacher']['perplexity']:.4f}")
