@@ -451,6 +451,8 @@ def main():
     student_model = AutoModelForCausalLM.from_pretrained(config["models"]["student"],
                                                          device_map="auto",
                                                          **model_kwargs)
+    teacher_model.eval()
+    teacher_model.requires_grad_(False)
     logger.info("Models loaded successfully")
 
     # Optionally freeze layers of the student model based on spectrum configuration
@@ -469,6 +471,7 @@ def main():
         num_teacher_layers=teacher_model.config.num_hidden_layers,
         dtype=torch.bfloat16)
     logger.info(f"Adaptation layer created with {len(adaptation_layer.projections)} projections")
+    student_model.adaptation_layer = adaptation_layer
 
     # Sanity check
     sanity_check_dataset(train_dataset, student_tokenizer)

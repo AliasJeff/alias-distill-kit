@@ -29,58 +29,6 @@ def load_and_preprocess_dataset(config):
     return dataset
 
 
-def sharegpt_format(example, student_tokenizer, config):
-    """Convert ShareGPT format to chat template format."""
-    conversations = example['conversations']
-    message = []
-
-    if isinstance(conversations, list):
-        for conversation in conversations:
-            if isinstance(conversation, dict):
-                if conversation.get('from') == 'human':
-                    message.append({"role": "user", "content": conversation.get('value', '')})
-                elif conversation.get('from') == 'gpt':
-                    message.append({"role": "assistant", "content": conversation.get('value', '')})
-                elif conversation.get('from') == 'system':
-                    message.insert(0, {"role": "system", "content": conversation.get('value', '')})
-
-    if not any(msg.get('role') == 'system' for msg in message):
-        message.insert(0, {"role": "system", "content": "You are a helpful assistant."})
-
-    text = student_tokenizer.apply_chat_template(message,
-                                                 tokenize=False,
-                                                 add_generation_prompt=True)
-    return {"text": text}
-
-
-def freedom_intelligence_format(example, student_tokenizer, config, mode="train"):
-    """Convert FreedomIntelligence format to chat template format using apply_chat_template."""
-    # Question, Complex_CoT, Response
-    messages = [
-        {
-            "role": "user",
-            "content": example['Question']
-        },
-        {
-            "role":
-            "system",
-            "content":
-            "You are a helpful assistant, you must never output <think> or </think> tags or any content within those tags, always provide a clear analysis and the final answer."
-        },
-        {
-            "role": "assistant",
-            "content": example['Response']
-        },
-    ]
-
-    text = student_tokenizer.apply_chat_template(messages,
-                                                 tokenize=False,
-                                                 add_generation_prompt=False)
-
-    # Return formatted text along with original fields for later use
-    return {"text": text, "Question": example['Question'], "Response": example['Response']}
-
-
 def mbpp_format(example, tokenizer, config, mode="train"):
     if mode == "train":
         message = [
