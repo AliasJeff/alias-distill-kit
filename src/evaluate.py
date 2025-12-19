@@ -314,6 +314,62 @@ def evaluate_models(config):  # noqa: C901
         logger.error(f"Error evaluating teacher model: {e}")
         results["models"]["teacher"] = {"error": str(e)}
 
+    # Evaluate origin teacher model
+    if "origin_teacher" in config["models"] and config["models"]["origin_teacher"]:
+        logger.info(f"Evaluating origin teacher model: {config['models']['origin_teacher']}")
+        try:
+            origin_teacher_tokenizer = AutoTokenizer.from_pretrained(
+                config["models"]["origin_teacher"])
+            origin_teacher_tokenizer.chat_template = config["tokenizer"]["chat_template"]
+
+            origin_teacher_model, _ = load_model_and_tokenizer(
+                config["models"]["origin_teacher"],
+                use_flash_attention=config["model_config"]["use_flash_attention"])
+
+            # Model info
+            total_params, trainable_params = count_parameters(origin_teacher_model)
+            model_size = compute_model_size(origin_teacher_model)
+
+            # Compute perplexity
+            logger.info("Computing perplexity for origin teacher model...")
+            perplexity, avg_loss = compute_perplexity(origin_teacher_model,
+                                                      origin_teacher_tokenizer,
+                                                      test_dataset,
+                                                      max_samples=100)
+
+            # Generate predictions for F1 and BLEU
+            logger.info("Generating predictions for F1 and BLEU scores...")
+            predictions, references = generate_predictions(origin_teacher_model,
+                                                           origin_teacher_tokenizer,
+                                                           test_dataset,
+                                                           max_samples=100)
+
+            # Compute F1 and BLEU
+            f1_score = compute_f1(predictions, references)
+            bleu_score = compute_bleu(predictions, references)
+
+            results["models"]["origin_teacher"] = {
+                "model_name": config["models"]["origin_teacher"],
+                "total_parameters": int(total_params),
+                "trainable_parameters": int(trainable_params),
+                "model_size_mb": float(model_size),
+                "perplexity": float(perplexity),
+                "average_loss": float(avg_loss),
+                "f1_score": float(f1_score),
+                "bleu_score": float(bleu_score),
+            }
+
+            logger.info(
+                f"Origin teacher model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, Size: {model_size:.2f}MB"
+            )
+
+            del origin_teacher_model
+            torch.cuda.empty_cache()
+
+        except Exception as e:
+            logger.error(f"Error evaluating origin teacher model: {e}")
+            results["models"]["origin_teacher"] = {"error": str(e)}
+
     # Evaluate original student model
     logger.info(f"Evaluating original student model: {config['models']['student']}")
     try:
@@ -494,6 +550,14 @@ def evaluate_models(config):  # noqa: C901
         logger.info(f"  - BLEU Score: {results['models']['teacher']['bleu_score']:.4f}")
         logger.info(f"  - Model Size: {results['models']['teacher']['model_size_mb']:.2f}MB")
         logger.info(f"  - Parameters: {results['models']['teacher']['total_parameters']:,}")
+
+    if "origin_teacher" in results["models"] and "error" not in results["models"]["origin_teacher"]:
+        logger.info("Origin Teacher Model:")
+        logger.info(f"  - Perplexity: {results['models']['origin_teacher']['perplexity']:.4f}")
+        logger.info(f"  - F1 Score: {results['models']['origin_teacher']['f1_score']:.4f}")
+        logger.info(f"  - BLEU Score: {results['models']['origin_teacher']['bleu_score']:.4f}")
+        logger.info(f"  - Model Size: {results['models']['origin_teacher']['model_size_mb']:.2f}MB")
+        logger.info(f"  - Parameters: {results['models']['origin_teacher']['total_parameters']:,}")
 
     if "original_student" in results["models"] and "error" not in results["models"][
             "original_student"]:
