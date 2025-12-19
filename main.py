@@ -246,7 +246,7 @@ def generate_samples(config, num_samples=5, prompts=None):
 
                 inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
                 generated_ids = model.generate(**inputs,
-                                               max_new_tokens=512,
+                                               max_new_tokens=config["tokenizer"]["max_new_tokens"],
                                                num_beams=1,
                                                temperature=0.7,
                                                top_p=0.9,
@@ -359,14 +359,16 @@ def test_model_outputs(  # noqa: C901
                                                            add_generation_prompt=True)
 
                     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-                    generated_ids = model.generate(**inputs,
-                                                   max_new_tokens=512,
-                                                   num_beams=1,
-                                                   temperature=0.7,
-                                                   top_p=0.9,
-                                                   do_sample=True,
-                                                   eos_token_id=tokenizer.eos_token_id,
-                                                   pad_token_id=tokenizer.eos_token_id)
+                    generated_ids = model.generate(
+                        **inputs,
+                        max_new_tokens=CONFIG["tokenizer"]["max_new_tokens"],
+                        num_beams=1,
+                        temperature=0.7,
+                        top_p=0.9,
+                        do_sample=True,
+                        eos_token_id=tokenizer.eos_token_id,
+                        pad_token_id=tokenizer.eos_token_id,
+                    )
 
                     elapsed_time = time.time() - start_time
                     total_time += elapsed_time

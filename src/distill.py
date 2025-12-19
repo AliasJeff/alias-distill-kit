@@ -2,14 +2,14 @@ import os
 import logging
 import torch
 import torch.nn.functional as F
-from trl import SFTTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForLanguageModeling, TrainingArguments
+from transformers.trainer import Trainer
 from transformers.trainer_callback import TrainerCallback
 import yaml
 from datetime import datetime
 
-from config import CONFIG
-from data_processing import load_dataset_split
+from .config import CONFIG
+from .data_processing import load_dataset_split, sanity_check_dataset
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -29,41 +29,6 @@ def freeze_student_spectrum(model, unfrozen_layers_file, logger):
             param.requires_grad = True
 
     logger.info(f"Froze layers based on spectrum configuration: {unfrozen_layers_file}")
-
-
-def sanity_check_dataset(dataset, tokenizer, num_samples=3):
-    logger.info("=" * 80)
-    logger.info("RUNNING SANITY CHECK ON DATASET")
-    logger.info("=" * 80)
-
-    for i in range(num_samples):
-        sample = dataset[i]
-
-        input_ids = sample["input_ids"]
-        labels = sample["labels"]
-
-        decoded = tokenizer.decode(input_ids, skip_special_tokens=False)
-
-        labeled_tokens = [tokenizer.decode([t]) for t in labels if t != -100]
-
-        logger.info(f"\n--- Sample {i} ---")
-        logger.info("FULL INPUT:")
-        logger.info(decoded)
-
-        logger.info("\nLABELED TOKENS (first 50):")
-        logger.info("".join(labeled_tokens[:50]))
-
-        assert any(t != -100 for t in labels), "❌ No supervised tokens found!"
-        assert "<|im_start|>assistant" in decoded, "❌ Assistant tag missing!"
-
-        # sanity: user tokens should NOT be labeled
-        user_tokens = tokenizer("<|im_start|>user", add_special_tokens=False)["input_ids"]
-        for i in range(len(labels) - len(user_tokens)):
-            if input_ids[i:i + len(user_tokens)] == user_tokens:
-                assert all(labels[j] == -100 for j in range(i, i + len(user_tokens)))
-
-    logger.info("✅ SANITY CHECK PASSED")
-    logger.info("=" * 80)
 
 
 class MultiLayerAdaptationLayer(torch.nn.Module):
@@ -219,7 +184,10 @@ class PeriodicTestCallback(TrainerCallback):
                                 add_generation_prompt=True,
                             )
                             gen_inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-                            gen_output = model.generate(**gen_inputs, max_new_tokens=512)
+                            gen_output = model.generate(
+                                **gen_inputs,
+                                max_new_tokens=CONFIG["tokenizer"]["max_new_tokens"],
+                            )
                             decoded_gen = tokenizer.decode(gen_output[0], skip_special_tokens=True)
                             logger.info(f"\nModel Output:\n{decoded_gen}")
                         except Exception as ge:
@@ -259,7 +227,7 @@ def pad_logits(student_logits, teacher_logits):
     return student_logits, teacher_logits
 
 
-class LogitsTrainer(SFTTrainer):
+class LogitsTrainer(Trainer):
     """Custom trainer for combined logits and hidden state knowledge distillation."""
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):

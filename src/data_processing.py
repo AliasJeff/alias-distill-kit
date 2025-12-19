@@ -65,22 +65,20 @@ def add_assistant_labels(example, tokenizer):
     input_ids = example["input_ids"]
     labels = [-100] * len(input_ids)
 
-    # NOTE: only for Qwen model
-    assistant_start_id = tokenizer.convert_tokens_to_ids("<|im_start|>assistant")
-    assistant_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    assistant_start = tokenizer("<|im_start|>assistant", add_special_tokens=False)["input_ids"]
+    assistant_end = tokenizer("<|im_end|>", add_special_tokens=False)["input_ids"]
 
-    in_assistant = False
-
-    for i, token_id in enumerate(input_ids):
-        if token_id == assistant_start_id:
-            in_assistant = True
-            labels[i] = -100
-            continue
-
-        if in_assistant:
-            labels[i] = token_id
-            if token_id == assistant_end_id:
-                in_assistant = False
+    i = 0
+    while i < len(input_ids):
+        if input_ids[i:i + len(assistant_start)] == assistant_start:
+            j = i + len(assistant_start)
+            while j < len(input_ids):
+                if input_ids[j:j + len(assistant_end)] == assistant_end:
+                    break
+                labels[j] = input_ids[j]
+                j += 1
+            i = j
+        i += 1
 
     example["labels"] = labels
     return example
@@ -184,3 +182,38 @@ def prepare_dataset(dataset, student_tokenizer, config, mode="train"):
     logger.info("Dataset splits saved to local cache")
 
     return tokenized_dataset
+
+
+def sanity_check_dataset(dataset, tokenizer, num_samples=3):
+    logger.info("=" * 80)
+    logger.info("RUNNING SANITY CHECK ON DATASET")
+    logger.info("=" * 80)
+
+    for i in range(num_samples):
+        sample = dataset[i]
+
+        input_ids = sample["input_ids"]
+        labels = sample["labels"]
+
+        decoded = tokenizer.decode(input_ids, skip_special_tokens=False)
+
+        labeled_tokens = [tokenizer.decode([t]) for t in labels if t != -100]
+
+        logger.info(f"\n--- Sample {i} ---")
+        logger.info("FULL INPUT:")
+        logger.info(decoded)
+
+        logger.info("\nLABELED TOKENS (first 50):")
+        logger.info("".join(labeled_tokens[:50]))
+
+        assert any(t != -100 for t in labels), "❌ No supervised tokens found!"
+        assert "<|im_start|>assistant" in decoded, "❌ Assistant tag missing!"
+
+        # sanity: user tokens should NOT be labeled
+        user_tokens = tokenizer("<|im_start|>user", add_special_tokens=False)["input_ids"]
+        for i in range(len(labels) - len(user_tokens)):
+            if input_ids[i:i + len(user_tokens)] == user_tokens:
+                assert all(labels[j] == -100 for j in range(i, i + len(user_tokens)))
+
+    logger.info("✅ SANITY CHECK PASSED")
+    logger.info("=" * 80)

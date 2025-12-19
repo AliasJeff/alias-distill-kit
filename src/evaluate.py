@@ -12,8 +12,8 @@ from tqdm import tqdm
 from sacrebleu import BLEU
 from collections import Counter
 
-from config import CONFIG
-from data_processing import load_dataset_split
+from .config import CONFIG
+from .data_processing import load_dataset_split
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -208,7 +208,7 @@ def generate_predictions(model, tokenizer, dataset, max_samples=100, batch_size=
 
             generated_ids = model.generate(
                 **inputs,
-                max_new_tokens=512,
+                max_new_tokens=CONFIG["tokenizer"]["max_new_tokens"],
                 num_beams=1,
                 do_sample=False,
                 pad_token_id=tokenizer.eos_token_id,
