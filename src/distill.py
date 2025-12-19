@@ -23,12 +23,47 @@ def freeze_student_spectrum(model, unfrozen_layers_file, logger):
         unfrozen_layers = yaml.safe_load(file)['unfrozen_parameters']
 
     for name, param in model.named_parameters():
-        if not any(layer in name for layer in unfrozen_layers):
+        if not any(name.startswith(layer) for layer in unfrozen_layers):
             param.requires_grad = False
         else:
             param.requires_grad = True
 
     logger.info(f"Froze layers based on spectrum configuration: {unfrozen_layers_file}")
+
+
+def sanity_check_dataset(dataset, tokenizer, num_samples=3):
+    logger.info("=" * 80)
+    logger.info("RUNNING SANITY CHECK ON DATASET")
+    logger.info("=" * 80)
+
+    for i in range(num_samples):
+        sample = dataset[i]
+
+        input_ids = sample["input_ids"]
+        labels = sample["labels"]
+
+        decoded = tokenizer.decode(input_ids, skip_special_tokens=False)
+
+        labeled_tokens = [tokenizer.decode([t]) for t in labels if t != -100]
+
+        logger.info(f"\n--- Sample {i} ---")
+        logger.info("FULL INPUT:")
+        logger.info(decoded)
+
+        logger.info("\nLABELED TOKENS (first 50):")
+        logger.info("".join(labeled_tokens[:50]))
+
+        assert any(t != -100 for t in labels), "❌ No supervised tokens found!"
+        assert "<|im_start|>assistant" in decoded, "❌ Assistant tag missing!"
+
+        # sanity: user tokens should NOT be labeled
+        user_tokens = tokenizer("<|im_start|>user", add_special_tokens=False)["input_ids"]
+        for i in range(len(labels) - len(user_tokens)):
+            if input_ids[i:i + len(user_tokens)] == user_tokens:
+                assert all(labels[j] == -100 for j in range(i, i + len(user_tokens)))
+
+    logger.info("✅ SANITY CHECK PASSED")
+    logger.info("=" * 80)
 
 
 class MultiLayerAdaptationLayer(torch.nn.Module):
@@ -144,7 +179,11 @@ class PeriodicTestCallback(TrainerCallback):
                         attention_mask = torch.tensor([sample['attention_mask']]).to(model.device)
 
                         # Forward pass
-                        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+                        outputs = model(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            labels=torch.tensor([sample["labels"]]).to(model.device),
+                        )
 
                         if isinstance(outputs, dict):
                             loss = outputs.get("loss", None)
@@ -279,11 +318,19 @@ class LogitsTrainer(SFTTrainer):
         student_logits_scaled = student_logits / self.config_dict["distillation"]["temperature"]
         teacher_logits_scaled = teacher_logits / self.config_dict["distillation"]["temperature"]
 
+        labels = inputs["labels"]  # [B, T]
+        mask = (labels != -100).unsqueeze(-1)  # [B, T, 1]
+
+        student_logits_masked = student_logits_scaled * mask
+        teacher_logits_masked = teacher_logits_scaled * mask
+
         loss_logits = F.kl_div(
-            F.log_softmax(student_logits_scaled, dim=-1),
-            F.softmax(teacher_logits_scaled, dim=-1),
-            reduction='batchmean') * (self.config_dict["distillation"]["temperature"]**
-                                      2) / self.config_dict["tokenizer"]["max_length"]
+            F.log_softmax(student_logits_masked, dim=-1),
+            F.softmax(teacher_logits_masked, dim=-1),
+            reduction="sum",
+        )
+
+        loss_logits = loss_logits / mask.sum().clamp_min(1)
 
         # Compute hidden state distillation loss if adaptation layer is available
         loss_hidden = 0
@@ -422,6 +469,9 @@ def main():
         num_teacher_layers=teacher_model.config.num_hidden_layers,
         dtype=torch.bfloat16)
     logger.info(f"Adaptation layer created with {len(adaptation_layer.projections)} projections")
+
+    # Sanity check
+    sanity_check_dataset(train_dataset, student_tokenizer)
 
     # Training arguments
     logger.info("Setting up training arguments...")

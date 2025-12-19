@@ -202,6 +202,7 @@ def generate_predictions(model, tokenizer, dataset, max_samples=100, batch_size=
                 )
                 prompts.append(prompt)
 
+            # TODO: double check
             inputs = tokenizer(prompts, return_tensors="pt", padding=True,
                                truncation=True).to(device)
 
