@@ -1,82 +1,96 @@
-"""Data processing utilities for distill_logits training."""
+"""Data processing utilities for distillation training."""
 
 import logging
 import os
 from pathlib import Path
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 
 logger = logging.getLogger(__name__)
 
 
 def load_and_preprocess_dataset(config):
     """Load and preprocess dataset from configuration."""
-    dataset = load_dataset(config["dataset"]["name"],
-                           config["dataset"]["lang"],
-                           split=config["dataset"]["split"])
+    if type(config["dataset"]["split"]) is str:
+        dataset = load_dataset(config["dataset"]["name"],
+                               config["dataset"]["subset"],
+                               split=config["dataset"]["split"])
+    elif type(config["dataset"]["split"]) is list:
+        splits = []
+
+        for split in config["dataset"]["split"]:
+            splits.append(
+                load_dataset(config["dataset"]["name"], config["dataset"]["subset"], split=split))
+
+        dataset = concatenate_datasets(splits)
+
     dataset = dataset.shuffle(seed=config["dataset"]["seed"])
     if "num_samples" in config["dataset"]:
         dataset = dataset.select(range(config["dataset"]["num_samples"]))
     return dataset
 
 
-def sharegpt_format(example, student_tokenizer, config):
-    """Convert ShareGPT format to chat template format."""
-    conversations = example['conversations']
-    message = []
+def mbpp_format(example, tokenizer, config, mode="train"):
+    if mode == "train":
+        message = [
+            {
+                "role": "user",
+                "content": example['text']
+            },
+            {
+                "role": "assistant",
+                "content": example["code"]
+            },
+        ]
+        add_generation_prompt = False
+    else:
+        message = [{"role": "user", "content": example['text']}]
+        add_generation_prompt = True
 
-    if isinstance(conversations, list):
-        for conversation in conversations:
-            if isinstance(conversation, dict):
-                if conversation.get('from') == 'human':
-                    message.append({"role": "user", "content": conversation.get('value', '')})
-                elif conversation.get('from') == 'gpt':
-                    message.append({"role": "assistant", "content": conversation.get('value', '')})
-                elif conversation.get('from') == 'system':
-                    message.insert(0, {"role": "system", "content": conversation.get('value', '')})
-
-    if not any(msg.get('role') == 'system' for msg in message):
-        message.insert(0, {"role": "system", "content": "You are a helpful assistant."})
-
-    text = student_tokenizer.apply_chat_template(message,
-                                                 tokenize=False,
-                                                 add_generation_prompt=True)
-    return {"text": text}
-
-
-def freedom_intelligence_format(example, student_tokenizer, config, mode="train"):
-    """Convert FreedomIntelligence format to chat template format using apply_chat_template."""
-    # Question, Complex_CoT, Response
-    messages = [
-        {
-            "role": "user",
-            "content": example['Question']
-        },
-        {
-            "role":
-            "system",
-            "content":
-            "You are a helpful assistant, you must never output <think> or </think> tags or any content within those tags, always provide a clear analysis and the final answer."
-        },
-        {
-            "role": "assistant",
-            "content": example['Response']
-        },
-    ]
-
-    text = student_tokenizer.apply_chat_template(messages,
-                                                 tokenize=False,
-                                                 add_generation_prompt=False)
+    text = tokenizer.apply_chat_template(
+        message,
+        tokenize=False,
+        add_generation_prompt=add_generation_prompt,
+    )
 
     # Return formatted text along with original fields for later use
-    return {"text": text, "Question": example['Question'], "Response": example['Response']}
+    return {
+        "text": text,
+        "Question": example['text'],
+        "Response": example['code'],
+        "Test": example['test_list']
+    }
+
+
+def add_assistant_labels(example, tokenizer):
+    input_ids = example["input_ids"]
+    labels = [-100] * len(input_ids)
+
+    assistant_start = tokenizer("<|im_start|>assistant", add_special_tokens=False)["input_ids"]
+    assistant_end = tokenizer("<|im_end|>", add_special_tokens=False)["input_ids"]
+
+    i = 0
+    while i < len(input_ids):
+        if input_ids[i:i + len(assistant_start)] == assistant_start:
+            j = i + len(assistant_start)
+            while j < len(input_ids):
+                if input_ids[j:j + len(assistant_end)] == assistant_end:
+                    break
+                labels[j] = input_ids[j]
+                j += 1
+            i = j
+        i += 1
+
+    example["labels"] = labels
+    return example
 
 
 def tokenize_function(examples, student_tokenizer, config):
-    """Tokenize text examples."""
-    return student_tokenizer(examples["text"],
-                             truncation=True,
-                             max_length=config["tokenizer"]["max_length"],
-                             padding="max_length")
+    return student_tokenizer(
+        examples["text"],
+        truncation=True,
+        max_length=config["tokenizer"]["max_length"],
+        padding=False,
+    )
 
 
 def get_dataset_cache_dir(config):
@@ -130,16 +144,23 @@ def prepare_dataset(dataset, student_tokenizer, config, mode="train"):
     logger.info("Formatting dataset with FreedomIntelligence format using apply_chat_template...")
 
     # Format dataset with apply_chat_template
-    dataset = dataset.map(lambda x: freedom_intelligence_format(x, student_tokenizer, config, mode),
-                          desc="Formatting FreedomIntelligence dataset")
+    dataset = dataset.map(lambda x: mbpp_format(x, student_tokenizer, config, mode),
+                          desc="Formatting mbpp dataset")
     logger.info("Dataset formatting complete")
 
     # Tokenize dataset
     logger.info("Tokenizing dataset...")
-    tokenized_dataset = dataset.map(lambda x: tokenize_function(x, student_tokenizer, config),
-                                    batched=True,
-                                    num_proc=8,
-                                    remove_columns=["text"])
+    tokenized_dataset = dataset.map(
+        lambda x: tokenize_function(x, student_tokenizer, config),
+        batched=True,
+        num_proc=8,
+        remove_columns=["text"],
+    )
+    tokenized_dataset = tokenized_dataset.map(
+        lambda x: add_assistant_labels(x, student_tokenizer),
+        num_proc=8,
+        desc="Adding assistant-only labels",
+    )
     logger.info("Tokenization complete")
 
     # Split into train and test
@@ -161,3 +182,38 @@ def prepare_dataset(dataset, student_tokenizer, config, mode="train"):
     logger.info("Dataset splits saved to local cache")
 
     return tokenized_dataset
+
+
+def sanity_check_dataset(dataset, tokenizer, num_samples=3):
+    logger.info("=" * 80)
+    logger.info("RUNNING SANITY CHECK ON DATASET")
+    logger.info("=" * 80)
+
+    for i in range(num_samples):
+        sample = dataset[i]
+
+        input_ids = sample["input_ids"]
+        labels = sample["labels"]
+
+        decoded = tokenizer.decode(input_ids, skip_special_tokens=False)
+
+        labeled_tokens = [tokenizer.decode([t]) for t in labels if t != -100]
+
+        logger.info(f"\n--- Sample {i} ---")
+        logger.info("FULL INPUT:")
+        logger.info(decoded)
+
+        logger.info("\nLABELED TOKENS (first 50):")
+        logger.info("".join(labeled_tokens[:50]))
+
+        assert any(t != -100 for t in labels), "❌ No supervised tokens found!"
+        assert "<|im_start|>assistant" in decoded, "❌ Assistant tag missing!"
+
+        # sanity: user tokens should NOT be labeled
+        user_tokens = tokenizer("<|im_start|>user", add_special_tokens=False)["input_ids"]
+        for i in range(len(labels) - len(user_tokens)):
+            if input_ids[i:i + len(user_tokens)] == user_tokens:
+                assert all(labels[j] == -100 for j in range(i, i + len(user_tokens)))
+
+    logger.info("✅ SANITY CHECK PASSED")
+    logger.info("=" * 80)

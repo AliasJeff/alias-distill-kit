@@ -2,14 +2,14 @@ import os
 import logging
 import torch
 import torch.nn.functional as F
-from trl import SFTTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForLanguageModeling, TrainingArguments
+from transformers.trainer import Trainer
 from transformers.trainer_callback import TrainerCallback
 import yaml
 from datetime import datetime
 
-from config import CONFIG
-from data_processing import load_dataset_split
+from .config import CONFIG
+from .data_processing import load_dataset_split, sanity_check_dataset
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -23,7 +23,7 @@ def freeze_student_spectrum(model, unfrozen_layers_file, logger):
         unfrozen_layers = yaml.safe_load(file)['unfrozen_parameters']
 
     for name, param in model.named_parameters():
-        if not any(layer in name for layer in unfrozen_layers):
+        if not any(name.startswith(layer) for layer in unfrozen_layers):
             param.requires_grad = False
         else:
             param.requires_grad = True
@@ -144,7 +144,11 @@ class PeriodicTestCallback(TrainerCallback):
                         attention_mask = torch.tensor([sample['attention_mask']]).to(model.device)
 
                         # Forward pass
-                        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+                        outputs = model(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            labels=torch.tensor([sample["labels"]]).to(model.device),
+                        )
 
                         if isinstance(outputs, dict):
                             loss = outputs.get("loss", None)
@@ -180,7 +184,10 @@ class PeriodicTestCallback(TrainerCallback):
                                 add_generation_prompt=True,
                             )
                             gen_inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-                            gen_output = model.generate(**gen_inputs, max_new_tokens=512)
+                            gen_output = model.generate(
+                                **gen_inputs,
+                                max_new_tokens=CONFIG["tokenizer"]["max_new_tokens"],
+                            )
                             decoded_gen = tokenizer.decode(gen_output[0], skip_special_tokens=True)
                             logger.info(f"\nModel Output:\n{decoded_gen}")
                         except Exception as ge:
@@ -220,7 +227,7 @@ def pad_logits(student_logits, teacher_logits):
     return student_logits, teacher_logits
 
 
-class LogitsTrainer(SFTTrainer):
+class LogitsTrainer(Trainer):
     """Custom trainer for combined logits and hidden state knowledge distillation."""
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -237,7 +244,6 @@ class LogitsTrainer(SFTTrainer):
         """
         device = next(model.parameters()).device
         inputs = {k: v.to(device) if hasattr(v, 'to') else v for k, v in inputs.items()}
-        self.teacher_model = self.teacher_model.to(device)
 
         student_model = model.module if hasattr(model, 'module') else model
         teacher_model = self.teacher_model.module if hasattr(self.teacher_model,
@@ -279,11 +285,16 @@ class LogitsTrainer(SFTTrainer):
         student_logits_scaled = student_logits / self.config_dict["distillation"]["temperature"]
         teacher_logits_scaled = teacher_logits / self.config_dict["distillation"]["temperature"]
 
-        loss_logits = F.kl_div(
-            F.log_softmax(student_logits_scaled, dim=-1),
-            F.softmax(teacher_logits_scaled, dim=-1),
-            reduction='batchmean') * (self.config_dict["distillation"]["temperature"]**
-                                      2) / self.config_dict["tokenizer"]["max_length"]
+        labels = inputs["labels"]  # [B, T]
+        mask = (labels != -100).unsqueeze(-1)  # [B, T, 1]
+
+        log_probs_student = F.log_softmax(student_logits_scaled, dim=-1)
+        probs_teacher = F.softmax(teacher_logits_scaled, dim=-1)
+
+        kl = F.kl_div(log_probs_student, probs_teacher, reduction="none")
+
+        kl = kl * mask
+        loss_logits = kl.sum() / mask.sum().clamp_min(1)
 
         # Compute hidden state distillation loss if adaptation layer is available
         loss_hidden = 0
@@ -323,7 +334,7 @@ class LogitsTrainer(SFTTrainer):
         # Project student hidden states to teacher dimensions
         adapted_student_hidden_states = self.adaptation_layer(student_hidden_states)
 
-        total_loss_kd = 0
+        total_loss = 0
         num_layers = 0
 
         # Compute KL divergence loss for each student-teacher layer pair
@@ -340,21 +351,18 @@ class LogitsTrainer(SFTTrainer):
                     f"Shape mismatch: student {student_hidden.shape} vs teacher {teacher_hidden.shape}"
                 )
 
-            # Compute KL divergence with temperature scaling
-            temperature = self.config_dict["distillation"]["temperature"]
-            loss_kd = F.kl_div(F.log_softmax(student_hidden / temperature, dim=-1),
-                               F.softmax(teacher_hidden / temperature, dim=-1),
-                               reduction='batchmean') * (temperature**2)
+            # Compute MSE loss
+            loss = F.mse_loss(student_hidden, teacher_hidden)
 
-            total_loss_kd += loss_kd
+            total_loss += loss
             num_layers += 1
 
         # Average loss across all layer pairs and normalize by hidden dimension
         if num_layers > 0:
-            avg_loss_kd = total_loss_kd / num_layers
+            avg_loss = total_loss / num_layers
             hidden_dim = adapted_student_hidden_states[0].size(-1)
-            scaled_loss_kd = avg_loss_kd / hidden_dim
-            return scaled_loss_kd
+            scaled_loss = avg_loss / hidden_dim
+            return scaled_loss
 
         return torch.tensor(0.0, device=device)
 
@@ -388,6 +396,9 @@ def main():
     test_dataset = load_dataset_split(config, student_tokenizer, split="test")
     logger.info(f"Test dataset loaded with {len(test_dataset)} samples")
 
+    # Data collator
+    data_collator = DataCollatorForLanguageModeling(tokenizer=student_tokenizer, mlm=False)
+
     # Load models with configurable flash attention
     logger.info("Loading models...")
     model_kwargs = {"torch_dtype": torch.bfloat16}
@@ -401,6 +412,8 @@ def main():
     student_model = AutoModelForCausalLM.from_pretrained(config["models"]["student"],
                                                          device_map="auto",
                                                          **model_kwargs)
+    teacher_model.eval()
+    teacher_model.requires_grad_(False)
     logger.info("Models loaded successfully")
 
     # Optionally freeze layers of the student model based on spectrum configuration
@@ -419,6 +432,10 @@ def main():
         num_teacher_layers=teacher_model.config.num_hidden_layers,
         dtype=torch.bfloat16)
     logger.info(f"Adaptation layer created with {len(adaptation_layer.projections)} projections")
+    student_model.adaptation_layer = adaptation_layer
+
+    # Sanity check
+    sanity_check_dataset(train_dataset, student_tokenizer)
 
     # Training arguments
     logger.info("Setting up training arguments...")
@@ -431,13 +448,14 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=test_dataset,
         args=training_arguments,
+        data_collator=data_collator,
     )
 
     # Store config in trainer for access in loss computation
     trainer.config_dict = config
 
     # Add the teacher model to the trainer
-    trainer.teacher_model = teacher_model
+    trainer.teacher_model = teacher_model.to(trainer.model.device)
 
     # Add the adaptation layer to the trainer for hidden state distillation
     trainer.adaptation_layer = adaptation_layer

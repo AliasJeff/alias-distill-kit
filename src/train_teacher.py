@@ -3,14 +3,14 @@
 import os
 import logging
 import torch
-from trl import SFTTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from transformers.trainer import Trainer
 from transformers.trainer_callback import TrainerCallback
 from datetime import datetime
 import random
 
-from config import CONFIG
-from data_processing import load_dataset_split
+from .config import CONFIG
+from .data_processing import load_dataset_split, sanity_check_dataset
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -63,7 +63,10 @@ class PeriodicTestCallback(TrainerCallback):
                         attention_mask = torch.tensor([sample['attention_mask']]).to(model.device)
 
                         # Forward pass
-                        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+                        labels = torch.tensor([sample["labels"]]).to(model.device)
+                        outputs = model(input_ids=input_ids,
+                                        attention_mask=attention_mask,
+                                        labels=labels)
 
                         if isinstance(outputs, dict):
                             loss = outputs.get("loss", None)
@@ -99,7 +102,9 @@ class PeriodicTestCallback(TrainerCallback):
                                 add_generation_prompt=True,
                             )
                             gen_inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-                            gen_output = model.generate(**gen_inputs, max_new_tokens=512)
+                            gen_output = model.generate(**gen_inputs,
+                                                        max_new_tokens=CONFIG["tokenizer"]
+                                                        ["max_new_tokens"])
                             decoded_gen = tokenizer.decode(gen_output[0], skip_special_tokens=True)
                             logger.info(f"\nModel Output:\n{decoded_gen}")
                         except Exception as ge:
@@ -169,13 +174,16 @@ def main():
     teacher_training_config["output_dir"] = teacher_training_config["output_dir"].replace(
         "results", "results_teacher")
 
+    # Sanity check
+    sanity_check_dataset(train_dataset, teacher_tokenizer)
+
     # Training arguments
     logger.info("Setting up training arguments...")
     training_arguments = TrainingArguments(**teacher_training_config)
 
     # Create the SFT Trainer for teacher model
     logger.info("Creating trainer...")
-    trainer = SFTTrainer(
+    trainer = Trainer(
         model=teacher_model,
         train_dataset=train_dataset,
         eval_dataset=test_dataset,

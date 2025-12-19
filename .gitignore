@@ -68,6 +68,7 @@ htmlcov/
 *.ckpt
 *.model
 results/
+results_teacher/
 checkpoints/
 outputs/
 logs/

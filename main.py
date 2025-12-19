@@ -4,10 +4,10 @@ import argparse
 import logging
 import sys
 
-from config import CONFIG
-from distill import main as train_main
-from train_teacher import main as train_teacher_main
-from evaluate import evaluate_models
+from src.config import CONFIG
+from src.distill import main as distill_main
+from src.train_teacher import main as train_teacher_main
+from src.evaluate import evaluate_models
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -22,14 +22,17 @@ def setup_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Train the model
-  python main.py train
+  # Distill the model
+  python main.py distill
 
   # Evaluate models
   python main.py evaluate
 
-  # Train and then evaluate
-  python main.py train --evaluate
+  # Distill and then evaluate
+  python main.py distill --evaluate
+
+  # Run the full pipeline: train teacher, distill student, and evaluate
+  python main.py all
 
   # Show configuration
   python main.py config
@@ -37,8 +40,8 @@ Examples:
   # Launch Gradio web interface
   python main.py gradio
 
-  # Full pipeline: train, evaluate, and generate samples
-  python main.py train --evaluate --generate-samples
+  # Full pipeline: distill, evaluate, and generate samples
+  python main.py distill --evaluate --generate-samples
         """)
 
     subparsers = parser.add_subparsers(dest='command', help='Command to execute')
@@ -56,18 +59,29 @@ Examples:
                                       default=5,
                                       help='Number of samples to generate')
 
-    # Train command
-    train_parser = subparsers.add_parser('train', help='Train the distilled model')
-    train_parser.add_argument('--evaluate',
-                              action='store_true',
-                              help='Run evaluation after training')
-    train_parser.add_argument('--generate-samples',
-                              action='store_true',
-                              help='Generate sample outputs after training')
-    train_parser.add_argument('--num-samples',
-                              type=int,
-                              default=5,
-                              help='Number of samples to generate')
+    # Distill command
+    distill_parser = subparsers.add_parser('distill', help='Train the distilled model')
+    distill_parser.add_argument('--evaluate',
+                                action='store_true',
+                                help='Run evaluation after training')
+    distill_parser.add_argument('--generate-samples',
+                                action='store_true',
+                                help='Generate sample outputs after training')
+    distill_parser.add_argument('--num-samples',
+                                type=int,
+                                default=5,
+                                help='Number of samples to generate')
+
+    # Full pipeline command
+    all_parser = subparsers.add_parser(
+        'all', help='Run the full pipeline: train teacher, distill student, and evaluate')
+    all_parser.add_argument('--generate-samples',
+                            action='store_true',
+                            help='Generate sample outputs after pipeline completion')
+    all_parser.add_argument('--num-samples',
+                            type=int,
+                            default=5,
+                            help='Number of samples to generate')
 
     # Evaluate command
     eval_parser = subparsers.add_parser('evaluate', help='Evaluate trained models')
@@ -156,15 +170,15 @@ def train_teacher_command(args):
         sys.exit(1)
 
 
-def train_command(args):
-    """Execute training command."""
-    logger.info("Starting training pipeline...")
+def distill_command(args):
+    """Execute distill command."""
+    logger.info("Starting distillation pipeline...")
     logger.info(f"Configuration: {CONFIG['project_name']}")
 
     try:
-        # Run training
-        train_main()
-        logger.info("Training completed successfully!")
+        # Run distillation
+        distill_main()
+        logger.info("Distillation completed successfully!")
 
         # Run evaluation if requested
         if args.evaluate:
@@ -178,7 +192,7 @@ def train_command(args):
                 generate_samples(CONFIG, num_samples=args.num_samples)
 
     except Exception as e:
-        logger.error(f"Error during training: {e}", exc_info=True)
+        logger.error(f"Error during distillation: {e}", exc_info=True)
         sys.exit(1)
 
 
@@ -204,7 +218,7 @@ def config_command(args):
 def generate_samples(config, num_samples=5, prompts=None):
     """Generate sample outputs from the trained model."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    from data_processing import load_dataset_split
+    from src.data_processing import load_dataset_split
     import torch
     import random
 
@@ -246,7 +260,7 @@ def generate_samples(config, num_samples=5, prompts=None):
 
                 inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
                 generated_ids = model.generate(**inputs,
-                                               max_new_tokens=512,
+                                               max_new_tokens=config["tokenizer"]["max_new_tokens"],
                                                num_beams=1,
                                                temperature=0.7,
                                                top_p=0.9,
@@ -297,7 +311,7 @@ def test_model_outputs(  # noqa: C901
     import torch
     import json
     from datetime import datetime
-    from data_processing import load_dataset_split
+    from src.data_processing import load_dataset_split
 
     logger.info("\n" + "=" * 70)
     logger.info("MODEL OUTPUT TEST")
@@ -306,7 +320,7 @@ def test_model_outputs(  # noqa: C901
     # Generate default output filename if not provided
     if not output_file:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = f"../results_output/test_results_{timestamp}.json"
+        output_file = f"results_output/test_results_{timestamp}.json"
 
     test_results = {
         "timestamp": datetime.now().isoformat(),
@@ -359,14 +373,16 @@ def test_model_outputs(  # noqa: C901
                                                            add_generation_prompt=True)
 
                     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-                    generated_ids = model.generate(**inputs,
-                                                   max_new_tokens=512,
-                                                   num_beams=1,
-                                                   temperature=0.7,
-                                                   top_p=0.9,
-                                                   do_sample=True,
-                                                   eos_token_id=tokenizer.eos_token_id,
-                                                   pad_token_id=tokenizer.eos_token_id)
+                    generated_ids = model.generate(
+                        **inputs,
+                        max_new_tokens=CONFIG["tokenizer"]["max_new_tokens"],
+                        num_beams=1,
+                        temperature=0.7,
+                        top_p=0.9,
+                        do_sample=True,
+                        eos_token_id=tokenizer.eos_token_id,
+                        pad_token_id=tokenizer.eos_token_id,
+                    )
 
                     elapsed_time = time.time() - start_time
                     total_time += elapsed_time
@@ -491,11 +507,42 @@ def test_command(args):
         sys.exit(1)
 
 
+def all_command(args):
+    """Execute the full pipeline command."""
+    logger.info("Starting full pipeline...")
+    try:
+        # 1. Train teacher
+        logger.info("\nSTEP 1: Training teacher model...")
+        train_teacher_main()
+        logger.info("Teacher model training completed successfully!")
+
+        # 2. Distill student
+        logger.info("\nSTEP 2: Distilling student model...")
+        distill_main()
+        logger.info("Student model distillation completed successfully!")
+
+        # 3. Evaluate
+        logger.info("\nSTEP 3: Evaluating models...")
+        evaluate_models(CONFIG)
+        logger.info("Evaluation completed successfully!")
+
+        # 4. Generate samples if requested
+        if args.generate_samples:
+            logger.info("\nSTEP 4: Generating sample outputs...")
+            generate_samples(CONFIG, num_samples=args.num_samples)
+
+        logger.info("\nFull pipeline completed successfully!")
+
+    except Exception as e:
+        logger.error(f"Error during full pipeline: {e}", exc_info=True)
+        sys.exit(1)
+
+
 def gradio_command(args):
     """Launch the Gradio web interface."""
     logger.info("Launching Gradio web interface for model comparison...")
     try:
-        from gradio_ui import main as gradio_main
+        from src.gradio_ui import main as gradio_main
         gradio_main()
     except ImportError as e:
         logger.error("Could not import Gradio. Please install it with 'pip install gradio'")
@@ -519,8 +566,10 @@ def main():
     # Route to appropriate command handler
     if args.command == 'train-teacher':
         train_teacher_command(args)
-    elif args.command == 'train':
-        train_command(args)
+    elif args.command == 'distill':
+        distill_command(args)
+    elif args.command == 'all':
+        all_command(args)
     elif args.command == 'evaluate':
         evaluate_command(args)
     elif args.command == 'config':
