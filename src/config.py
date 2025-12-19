@@ -3,11 +3,12 @@
 CONFIG = {
     "project_name": "distillation",
     "dataset": {
-        "name": "google-research-datasets/mbpp",
-        "subset": "full",
-        "split": ["train", "test", "validation"],  # input a single string or a list of split names
-        # "num_samples": , # You can pass a number here to limit the number of samples to use.
-        "seed": 42
+        "name": "QuixiAI/leet10k-alpaca",
+        "subset": None,
+        "split": "train",  # input a single string or a list of split names
+        "num_samples": 4000,  # You can pass a number here to limit the number of samples to use.
+        "seed": 42,
+        "format_function": "leet10k_format"
     },
     "models": {
         "teacher_origin": "Qwen/Qwen3-1.7B",

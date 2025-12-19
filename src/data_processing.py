@@ -61,6 +61,37 @@ def mbpp_format(example, tokenizer, config, mode="train"):
     }
 
 
+def leet10k_format(example, tokenizer, config, mode="train"):
+    if mode == "train":
+        message = [
+            {
+                "role": "user",
+                "content": f"{example['instruction']}\n{example['input']}"
+            },
+            {
+                "role": "assistant",
+                "content": example["output"]
+            },
+        ]
+        add_generation_prompt = False
+    else:
+        message = [{"role": "user", "content": f"{example['instruction']}\n{example['input']}"}]
+        add_generation_prompt = True
+
+    text = tokenizer.apply_chat_template(
+        message,
+        tokenize=False,
+        add_generation_prompt=add_generation_prompt,
+    )
+
+    # Return formatted text along with original fields for later use
+    return {
+        "text": text,
+        "Question": f"{example['instruction']}\n{example['input']}",
+        "Response": example['output']
+    }
+
+
 def add_assistant_labels(example, tokenizer):
     input_ids = example["input_ids"]
     labels = [-100] * len(input_ids)
@@ -144,8 +175,10 @@ def prepare_dataset(dataset, student_tokenizer, config, mode="train"):
     logger.info("Formatting dataset with FreedomIntelligence format using apply_chat_template...")
 
     # Format dataset with apply_chat_template
-    dataset = dataset.map(lambda x: mbpp_format(x, student_tokenizer, config, mode),
-                          desc="Formatting mbpp dataset")
+    func_name = config["dataset"]["format_function"]
+    format_func = globals()[func_name]
+    dataset = dataset.map(lambda x: format_func(x, student_tokenizer, config, mode),
+                          desc="Formatting dataset")
     logger.info("Dataset formatting complete")
 
     # Tokenize dataset
