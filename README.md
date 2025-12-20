@@ -185,41 +185,25 @@ python main.py gradio
 ```
 alias-distill-kit/
 ├── src/
-│   ├── README.md                          # Documentation
 │   ├── config.py                          # Configuration settings
 │   ├── data_processing.py                 # Dataset loading and preprocessing
-│   ├── evaluate.py                        # Evaluation functions (perplexity, BLEU, F1)
-│   ├── requirements.txt                   # Python dependencies
-│   │
-│   ├── distill_logits/
-│   │   ├── main.py                        # Main entry point with CLI
-│   │   ├── train_teacher.py               # Teacher model training script (SFT)
-│   │   ├── distill.py                     # Combined logits + hidden state distillation trainer
-│   │   └── __init__.py
-│   │
-│   └── distill_hidden/
-│       ├── distil_hidden.py               # Hidden state distillation (reference implementation)
-│       └── __init__.py
+│   ├── distill.py                         # Main distillation script
+│   ├── evaluate.py                        # Evaluation functions
+│   └── main.py                            # Main entry point with CLI
+│
+├── distill_logits_dpo/
+│   └── dpo_distil_logits.py               # DPO with logits distillation
+│
+├── deepspeed_configs/                     # DeepSpeed configurations
+│   ├── zero1.json
+│   └── zero2.json
 │
 ├── results/                               # Student model training outputs
-│   ├── pytorch_model.bin                  # Trained student model
-│   ├── adaptation_layer.pth               # Trained adaptation layer weights
-│   └── training_logs/
-│
 ├── results_teacher/                       # Teacher model training outputs
-│   ├── pytorch_model.bin                  # Trained teacher model
-│   └── training_logs/
-│
-└── .gitignore                             # Git ignore rules
+├── .gitignore                             # Git ignore rules
+├── README.md                              # This file
+└── requirements.txt                       # Python dependencies
 ```
-
-### Key Directories
-
-- **src/**: Main source code directory
-  - **distill_logits/**: Combined logits and hidden state distillation implementation
-  - **distill_hidden/**: Reference hidden state distillation implementation
-- **results/**: Student model checkpoints and outputs
-- **results_teacher/**: Teacher model checkpoints and outputs
 
 ## Training Details
 
@@ -233,6 +217,14 @@ Where:
 - `w_logits` (distillation_weight): Weight for logits-based KL divergence (default: 1.0)
 - `w_hidden` (hidden_weight): Weight for hidden state-based KL divergence (default: 0.5)
 - `temperature`: Controls softness of probability distributions (default: 3.0)
+
+### Data Processing
+- **Dataset Loading**: Loads datasets from Hugging Face based on `config.py`.
+- **Chat Template Formatting**: Applies a chat template to format the raw data into a conversational format using `apply_chat_template`. This step is customizable via the `format_function` in the configuration.
+- **Tokenization**: The formatted text is tokenized using the student model's tokenizer.
+- **Label Generation**: For training, labels are generated only for the assistant's responses by setting the user's parts to -100.
+- **Train/Test Split**: The dataset is split into training and testing sets (90/10 split by default).
+- **Caching**: Processed datasets are cached locally to speed up subsequent runs.
 
 ### Hidden State Distillation
 - Student hidden states are projected to teacher dimensions using `MultiLayerAdaptationLayer`
@@ -269,4 +261,4 @@ Where:
 - `results/evaluation/evaluation_results_*.json`: Evaluation metrics and comparison
 
 ### Testing
-- `test_results_*.json`: Test output metrics (auto-generated with timestamp if `--output-file` not specified)
+- `results_output/test_results_*.json`: Test output metrics (auto-generated with timestamp if `--output-file` not specified)
