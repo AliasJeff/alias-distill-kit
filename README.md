@@ -2,6 +2,8 @@
 
 Comprehensive knowledge distillation framework for training efficient student models using combined logits and hidden state distillation from teacher models.
 
+| NOTE: Only for Qwen models.
+
 ## Overview
 
 alias-distill-kit is a comprehensive knowledge distillation toolkit that enables you to:
@@ -17,7 +19,6 @@ alias-distill-kit is a comprehensive knowledge distillation toolkit that enables
 - **Multi-Layer Adaptation**: Proportional layer mapping between student and teacher models with learnable projections
 - **Flexible Model Support**: Works with any HuggingFace transformer model with different architectures
 - **Comprehensive Evaluation**: Computes perplexity, BLEU scores, and F1 scores
-- **Model Comparison**: Compare original and distilled models side-by-side
 - **Performance Testing**: Generate outputs and measure generation speed
 - **Configurable Training**: Supports flash attention, mixed precision, gradient accumulation, and more
 
@@ -86,11 +87,11 @@ python main.py distill --evaluate
 python main.py distill --evaluate --generate-samples --num-samples 5
 
 # Distill in background
-nohup python -u -m src.distill > distill.log 2>&1 &
+nohup python main.py distill > distill.log 2>&1 &
 # Check logs
 tail -f distill.log
 # Check process
-ps -ef | grep distill.py
+ps -ef | grep main.py
 ```
 
 ### 1a. Run Full Pipeline
@@ -103,6 +104,13 @@ python main.py all
 
 # Run the full pipeline and generate samples at the end
 python main.py all --generate-samples --num-samples 5
+
+# Run the full pipeline in background
+nohup python main.py all --generate-samples --num-samples 3 > all.log 2>&1 &
+# Check logs
+tail -f all.log
+# Check process
+ps -ef | grep main.py
 ```
 
 ### 2. Evaluate Models

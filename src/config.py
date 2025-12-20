@@ -3,11 +3,12 @@
 CONFIG = {
     "project_name": "distillation",
     "dataset": {
-        "name": "google-research-datasets/mbpp",
-        "subset": "full",
-        "split": ["train", "test", "validation"],  # input a single string or a list of split names
-        # "num_samples": , # You can pass a number here to limit the number of samples to use.
-        "seed": 42
+        "name": "QuixiAI/leet10k-alpaca",
+        "subset": None,
+        "split": "train",  # input a single string or a list of split names
+        "num_samples": 4000,  # You can pass a number here to limit the number of samples to use.
+        "seed": 42,
+        "format_function": "leet10k_format"
     },
     "models": {
         "teacher_origin": "Qwen/Qwen3-1.7B",
@@ -16,26 +17,22 @@ CONFIG = {
     },
     "tokenizer": {
         "max_length":
-        4096,
+        38912,
         "max_new_tokens":
-        512,
-        "chat_template":
-        ("{%- for message in messages -%}"
-         "{%- if loop.first and messages[0]['role'] != 'system' -%}"
-         "<|im_start|>system\n"
-         "You are a helpful assistant, you MUST NOT reveal your chain-of-thought, "
-         "MUST NOT output any reasoning or thinking process, you must never output "
-         "<think> or </think> tags or any content within those tags, always ONLY "
-         "provide the final answer."
-         "<|im_end|>\n"
-         "{%- endif -%}"
-         "<|im_start|>{{ message['role'] }}\n"
-         "{{ message['content'] }}"
-         "<|im_end|>\n"
-         "{%- endfor -%}"
-         "{%- if add_generation_prompt -%}"
-         "<|im_start|>assistant\n"
-         "{%- endif -%}")
+        32768,
+        "chat_template": ("{%- for message in messages -%}"
+                          "{%- if loop.first and messages[0]['role'] != 'system' -%}"
+                          "<|im_start|>system\n"
+                          "You are a helpful assistant. /no_think"
+                          "<|im_end|>\n"
+                          "{%- endif -%}"
+                          "<|im_start|>{{ message['role'] }}\n"
+                          "{{ message['content'] }}"
+                          "<|im_end|>\n"
+                          "{%- endfor -%}"
+                          "{%- if add_generation_prompt -%}"
+                          "<|im_start|>assistant\n"
+                          "{%- endif -%}")
     },
     "training": {
         "output_dir": "results",

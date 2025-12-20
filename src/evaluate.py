@@ -11,6 +11,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm import tqdm
 from sacrebleu import BLEU
 from collections import Counter
+from rouge_score import rouge_scorer
 
 from .config import CONFIG
 from .data_processing import load_dataset_split
@@ -170,6 +171,44 @@ def compute_f1(predictions, references):
         return 0.0
 
 
+def compute_rouge(predictions, references):
+    """Compute ROUGE scores (ROUGE-1, ROUGE-2, ROUGE-L).
+
+    Args:
+        predictions: List of predicted texts
+        references: List of reference texts
+
+    Returns:
+        Dictionary with ROUGE-1, ROUGE-2, ROUGE-L F1 scores
+    """
+    scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
+    rouge_scores = {
+        'rouge1': [],
+        'rouge2': [],
+        'rougeL': [],
+    }
+
+    try:
+        for pred, ref in zip(predictions, references):
+            if isinstance(ref, list):
+                ref = ref[0]
+
+            scores = scorer.score(ref, pred)
+            rouge_scores['rouge1'].append(scores['rouge1'].fmeasure)
+            rouge_scores['rouge2'].append(scores['rouge2'].fmeasure)
+            rouge_scores['rougeL'].append(scores['rougeL'].fmeasure)
+
+        avg_rouge_scores = {
+            key: (sum(val) / len(val)) * 100 if val else 0.0
+            for key, val in rouge_scores.items()
+        }
+
+        return avg_rouge_scores
+    except Exception as e:
+        logger.warning(f"Error computing ROUGE score: {e}")
+        return {'rouge1': 0.0, 'rouge2': 0.0, 'rougeL': 0.0}
+
+
 def generate_predictions(model, tokenizer, dataset, max_samples=100, batch_size=8):
     model.eval()
     device = next(model.parameters()).device
@@ -199,6 +238,7 @@ def generate_predictions(model, tokenizer, dataset, max_samples=100, batch_size=
                     messages,
                     tokenize=False,
                     add_generation_prompt=True,
+                    enable_thinking=False,
                 )
                 prompts.append(prompt)
 
@@ -211,7 +251,6 @@ def generate_predictions(model, tokenizer, dataset, max_samples=100, batch_size=
                 max_new_tokens=CONFIG["tokenizer"]["max_new_tokens"],
                 num_beams=1,
                 do_sample=False,
-                pad_token_id=tokenizer.eos_token_id,
             )
 
             for idx in range(len(prompts)):
@@ -229,6 +268,72 @@ def generate_predictions(model, tokenizer, dataset, max_samples=100, batch_size=
 
     pbar.close()
     return predictions, references
+
+
+def _evaluate_single_model(model_path, tokenizer, test_dataset, config, model_name_key):
+    """Helper function to evaluate a single model."""
+    try:
+        logger.info(f"Evaluating {model_name_key}: {model_path}")
+
+        # For teacher models, we might need to load a different tokenizer
+        if model_name_key in ["teacher", "teacher_origin"]:
+            eval_tokenizer = AutoTokenizer.from_pretrained(model_path)
+            eval_tokenizer.chat_template = config["tokenizer"]["chat_template"]
+        else:
+            eval_tokenizer = tokenizer
+
+        model, _ = load_model_and_tokenizer(
+            model_path, use_flash_attention=config["model_config"]["use_flash_attention"])
+
+        # Model info
+        total_params, trainable_params = count_parameters(model)
+        model_size = compute_model_size(model)
+
+        # Compute perplexity
+        logger.info(f"Computing perplexity for {model_name_key}...")
+        perplexity, avg_loss = compute_perplexity(model,
+                                                  eval_tokenizer,
+                                                  test_dataset,
+                                                  max_samples=100)
+
+        # Generate predictions
+        logger.info(f"Generating predictions for {model_name_key}...")
+        predictions, references = generate_predictions(model,
+                                                       eval_tokenizer,
+                                                       test_dataset,
+                                                       max_samples=100)
+
+        # Compute F1, BLEU, and ROUGE
+        f1_score = compute_f1(predictions, references)
+        bleu_score = compute_bleu(predictions, references)
+        rouge_scores = compute_rouge(predictions, references)
+
+        results = {
+            "model_name": model_path,
+            "total_parameters": int(total_params),
+            "trainable_parameters": int(trainable_params),
+            "model_size_mb": float(model_size),
+            "perplexity": float(perplexity),
+            "average_loss": float(avg_loss),
+            "f1_score": float(f1_score),
+            "bleu_score": float(bleu_score),
+            "rouge1": float(rouge_scores['rouge1']),
+            "rouge2": float(rouge_scores['rouge2']),
+            "rougeL": float(rouge_scores['rougeL']),
+        }
+
+        logger.info(
+            f"{model_name_key} - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, ROUGE-L: {rouge_scores['rougeL']:.4f}, Size: {model_size:.2f}MB"
+        )
+
+        del model
+        torch.cuda.empty_cache()
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Error evaluating {model_name_key}: {e}")
+        return {"error": str(e)}
 
 
 def evaluate_models(config):  # noqa: C901
@@ -260,274 +365,52 @@ def evaluate_models(config):  # noqa: C901
         "models": {}
     }
 
-    # Evaluate teacher model
-    logger.info(f"Evaluating teacher model: {config['models']['teacher']}")
-    try:
-        teacher_tokenizer = AutoTokenizer.from_pretrained(config["models"]["teacher"])
-        teacher_tokenizer.chat_template = config["tokenizer"]["chat_template"]
-
-        teacher_model, _ = load_model_and_tokenizer(
+    # Evaluate models
+    # 1. Teacher origin
+    results["models"]["teacher_origin"] = _evaluate_single_model(
+        config["models"]["teacher_origin"],
+        student_tokenizer,
+        test_dataset,
+        config,
+        "teacher_origin",
+    )
+    trained_teacher_path = config["models"]["teacher"]
+    if Path(trained_teacher_path).exists():
+        results["models"]["teacher"] = _evaluate_single_model(
             config["models"]["teacher"],
-            use_flash_attention=config["model_config"]["use_flash_attention"])
-
-        # Model info
-        total_params, trainable_params = count_parameters(teacher_model)
-        model_size = compute_model_size(teacher_model)
-
-        # Compute perplexity
-        logger.info("Computing perplexity for teacher model...")
-        perplexity, avg_loss = compute_perplexity(teacher_model,
-                                                  teacher_tokenizer,
-                                                  test_dataset,
-                                                  max_samples=100)
-
-        # Generate predictions for F1 and BLEU
-        logger.info("Generating predictions for F1 and BLEU scores...")
-        predictions, references = generate_predictions(teacher_model,
-                                                       teacher_tokenizer,
-                                                       test_dataset,
-                                                       max_samples=100)
-
-        # Compute F1 and BLEU
-        f1_score = compute_f1(predictions, references)
-        bleu_score = compute_bleu(predictions, references)
-
-        results["models"]["teacher"] = {
-            "model_name": config["models"]["teacher"],
-            "total_parameters": int(total_params),
-            "trainable_parameters": int(trainable_params),
-            "model_size_mb": float(model_size),
-            "perplexity": float(perplexity),
-            "average_loss": float(avg_loss),
-            "f1_score": float(f1_score),
-            "bleu_score": float(bleu_score),
-        }
-
-        logger.info(
-            f"Teacher model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, Size: {model_size:.2f}MB"
+            student_tokenizer,
+            test_dataset,
+            config,
+            "teacher",
         )
+    else:
+        logger.warning(f"Trained teacher model not found at {trained_teacher_path}")
+        results["models"]["teacher"] = {"error": f"Model not found at {trained_teacher_path}"}
 
-        del teacher_model
-        torch.cuda.empty_cache()
+    # 2. Original student
+    results["models"]["original_student"] = _evaluate_single_model(
+        config["models"]["student"],
+        student_tokenizer,
+        test_dataset,
+        config,
+        "original_student",
+    )
 
-    except Exception as e:
-        logger.error(f"Error evaluating teacher model: {e}")
-        results["models"]["teacher"] = {"error": str(e)}
-
-    # Evaluate origin teacher model
-    logger.info(f"Evaluating origin teacher model: {config['models']['teacher_origin']}")
-    try:
-        origin_teacher_tokenizer = AutoTokenizer.from_pretrained(config["models"]["teacher_origin"])
-        origin_teacher_tokenizer.chat_template = config["tokenizer"]["chat_template"]
-
-        origin_teacher_model, _ = load_model_and_tokenizer(
-            config["models"]["teacher_origin"],
-            use_flash_attention=config["model_config"]["use_flash_attention"])
-
-        # Model info
-        total_params, trainable_params = count_parameters(origin_teacher_model)
-        model_size = compute_model_size(origin_teacher_model)
-
-        # Compute perplexity
-        logger.info("Computing perplexity for origin teacher model...")
-        perplexity, avg_loss = compute_perplexity(origin_teacher_model,
-                                                  origin_teacher_tokenizer,
-                                                  test_dataset,
-                                                  max_samples=100)
-
-        # Generate predictions for F1 and BLEU
-        logger.info("Generating predictions for F1 and BLEU scores...")
-        predictions, references = generate_predictions(origin_teacher_model,
-                                                       origin_teacher_tokenizer,
-                                                       test_dataset,
-                                                       max_samples=100)
-
-        # Compute F1 and BLEU
-        f1_score = compute_f1(predictions, references)
-        bleu_score = compute_bleu(predictions, references)
-
-        results["models"]["teacher_origin"] = {
-            "model_name": config["models"]["teacher_origin"],
-            "total_parameters": int(total_params),
-            "trainable_parameters": int(trainable_params),
-            "model_size_mb": float(model_size),
-            "perplexity": float(perplexity),
-            "average_loss": float(avg_loss),
-            "f1_score": float(f1_score),
-            "bleu_score": float(bleu_score),
-        }
-
-        logger.info(
-            f"Origin teacher model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, Size: {model_size:.2f}MB"
-        )
-
-        del origin_teacher_model
-        torch.cuda.empty_cache()
-
-    except Exception as e:
-        logger.error(f"Error evaluating origin teacher model: {e}")
-        results["models"]["teacher_origin"] = {"error": str(e)}
-
-    # Evaluate original student model
-    logger.info(f"Evaluating original student model: {config['models']['student']}")
-    try:
-        student_model, _ = load_model_and_tokenizer(
-            config["models"]["student"],
-            use_flash_attention=config["model_config"]["use_flash_attention"])
-
-        # Model info
-        total_params, trainable_params = count_parameters(student_model)
-        model_size = compute_model_size(student_model)
-
-        # Compute perplexity
-        logger.info("Computing perplexity for original student model...")
-        perplexity, avg_loss = compute_perplexity(student_model,
-                                                  student_tokenizer,
-                                                  test_dataset,
-                                                  max_samples=100)
-
-        # Generate predictions for F1 and BLEU
-        logger.info("Generating predictions for F1 and BLEU scores...")
-        predictions, references = generate_predictions(student_model,
-                                                       student_tokenizer,
-                                                       test_dataset,
-                                                       max_samples=100)
-
-        # Compute F1 and BLEU
-        f1_score = compute_f1(predictions, references)
-        bleu_score = compute_bleu(predictions, references)
-
-        results["models"]["original_student"] = {
-            "model_name": config["models"]["student"],
-            "total_parameters": int(total_params),
-            "trainable_parameters": int(trainable_params),
-            "model_size_mb": float(model_size),
-            "perplexity": float(perplexity),
-            "average_loss": float(avg_loss),
-            "f1_score": float(f1_score),
-            "bleu_score": float(bleu_score),
-        }
-
-        logger.info(
-            f"Original student model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, Size: {model_size:.2f}MB"
-        )
-
-        del student_model
-        torch.cuda.empty_cache()
-
-    except Exception as e:
-        logger.error(f"Error evaluating original student model: {e}")
-        results["models"]["original_student"] = {"error": str(e)}
-
-    # Evaluate distilled student model
+    # 3. Distilled student
     distilled_model_path = config["training"]["output_dir"]
     if Path(distilled_model_path).exists():
-        logger.info(f"Evaluating distilled student model: {distilled_model_path}")
-        try:
-            distilled_model, _ = load_model_and_tokenizer(
-                distilled_model_path,
-                use_flash_attention=config["model_config"]["use_flash_attention"])
-
-            # Model info
-            total_params, trainable_params = count_parameters(distilled_model)
-            model_size = compute_model_size(distilled_model)
-
-            # Compute perplexity
-            logger.info("Computing perplexity for distilled student model...")
-            perplexity, avg_loss = compute_perplexity(distilled_model,
-                                                      student_tokenizer,
-                                                      test_dataset,
-                                                      max_samples=100)
-
-            # Generate predictions for F1 and BLEU
-            logger.info("Generating predictions for F1 and BLEU scores...")
-            predictions, references = generate_predictions(distilled_model,
-                                                           student_tokenizer,
-                                                           test_dataset,
-                                                           max_samples=100)
-
-            # Compute F1 and BLEU
-            f1_score = compute_f1(predictions, references)
-            bleu_score = compute_bleu(predictions, references)
-
-            results["models"]["distilled_student"] = {
-                "model_path": distilled_model_path,
-                "total_parameters": int(total_params),
-                "trainable_parameters": int(trainable_params),
-                "model_size_mb": float(model_size),
-                "perplexity": float(perplexity),
-                "average_loss": float(avg_loss),
-                "f1_score": float(f1_score),
-                "bleu_score": float(bleu_score),
-            }
-
-            logger.info(
-                f"Distilled student model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, Size: {model_size:.2f}MB"
-            )
-
-            del distilled_model
-            torch.cuda.empty_cache()
-
-        except Exception as e:
-            logger.error(f"Error evaluating distilled student model: {e}")
-            results["models"]["distilled_student"] = {"error": str(e)}
+        results["models"]["distilled_student"] = _evaluate_single_model(
+            distilled_model_path,
+            student_tokenizer,
+            test_dataset,
+            config,
+            "distilled_student",
+        )
     else:
         logger.warning(f"Distilled model not found at {distilled_model_path}")
         results["models"]["distilled_student"] = {
             "error": f"Model not found at {distilled_model_path}"
         }
-
-    # Compute comparison metrics
-    results["comparison"] = {}
-
-    # Compare distilled vs original student
-    if "original_student" in results["models"] and "distilled_student" in results["models"]:
-        if "error" not in results["models"]["original_student"] and "error" not in results[
-                "models"]["distilled_student"]:
-            original_ppl = results["models"]["original_student"]["perplexity"]
-            distilled_ppl = results["models"]["distilled_student"]["perplexity"]
-
-            results["comparison"]["distilled_vs_original_student"] = {
-                "perplexity_improvement": float(
-                    (original_ppl - distilled_ppl) / original_ppl * 100),
-                "perplexity_ratio": float(distilled_ppl / original_ppl),
-                "original_perplexity": float(original_ppl),
-                "distilled_perplexity": float(distilled_ppl),
-            }
-
-            logger.info(
-                f"Distilled vs Original Student - Perplexity improvement: {results['comparison']['distilled_vs_original_student']['perplexity_improvement']:.2f}%"
-            )
-
-    # Compare student models vs teacher
-    if "teacher" in results["models"] and "error" not in results["models"]["teacher"]:
-        teacher_ppl = results["models"]["teacher"]["perplexity"]
-
-        if "original_student" in results["models"] and "error" not in results["models"][
-                "original_student"]:
-            original_ppl = results["models"]["original_student"]["perplexity"]
-            results["comparison"]["original_student_vs_teacher"] = {
-                "perplexity_gap": float(original_ppl - teacher_ppl),
-                "perplexity_ratio": float(original_ppl / teacher_ppl),
-                "teacher_perplexity": float(teacher_ppl),
-                "student_perplexity": float(original_ppl),
-            }
-            logger.info(
-                f"Original Student vs Teacher - Perplexity gap: {results['comparison']['original_student_vs_teacher']['perplexity_gap']:.4f}, Ratio: {results['comparison']['original_student_vs_teacher']['perplexity_ratio']:.4f}"
-            )
-
-        if "distilled_student" in results["models"] and "error" not in results["models"][
-                "distilled_student"]:
-            distilled_ppl = results["models"]["distilled_student"]["perplexity"]
-            results["comparison"]["distilled_student_vs_teacher"] = {
-                "perplexity_gap": float(distilled_ppl - teacher_ppl),
-                "perplexity_ratio": float(distilled_ppl / teacher_ppl),
-                "teacher_perplexity": float(teacher_ppl),
-                "student_perplexity": float(distilled_ppl),
-            }
-            logger.info(
-                f"Distilled Student vs Teacher - Perplexity gap: {results['comparison']['distilled_student_vs_teacher']['perplexity_gap']:.4f}, Ratio: {results['comparison']['distilled_student_vs_teacher']['perplexity_ratio']:.4f}"
-            )
 
     # Save results
     results_file = results_dir / f"evaluation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -546,6 +429,9 @@ def evaluate_models(config):  # noqa: C901
         logger.info(f"  - Perplexity: {results['models']['teacher_origin']['perplexity']:.4f}")
         logger.info(f"  - F1 Score: {results['models']['teacher_origin']['f1_score']:.4f}")
         logger.info(f"  - BLEU Score: {results['models']['teacher_origin']['bleu_score']:.4f}")
+        logger.info(f"  - ROUGE-1: {results['models']['teacher_origin']['rouge1']:.4f}")
+        logger.info(f"  - ROUGE-2: {results['models']['teacher_origin']['rouge2']:.4f}")
+        logger.info(f"  - ROUGE-L: {results['models']['teacher_origin']['rougeL']:.4f}")
         logger.info(f"  - Model Size: {results['models']['teacher_origin']['model_size_mb']:.2f}MB")
         logger.info(f"  - Parameters: {results['models']['teacher_origin']['total_parameters']:,}")
 
@@ -554,16 +440,22 @@ def evaluate_models(config):  # noqa: C901
         logger.info(f"  - Perplexity: {results['models']['teacher']['perplexity']:.4f}")
         logger.info(f"  - F1 Score: {results['models']['teacher']['f1_score']:.4f}")
         logger.info(f"  - BLEU Score: {results['models']['teacher']['bleu_score']:.4f}")
+        logger.info(f"  - ROUGE-1: {results['models']['teacher']['rouge1']:.4f}")
+        logger.info(f"  - ROUGE-2: {results['models']['teacher']['rouge2']:.4f}")
+        logger.info(f"  - ROUGE-L: {results['models']['teacher']['rougeL']:.4f}")
         logger.info(f"  - Model Size: {results['models']['teacher']['model_size_mb']:.2f}MB")
         logger.info(f"  - Parameters: {results['models']['teacher']['total_parameters']:,}")
 
-    if "origin_teacher" in results["models"] and "error" not in results["models"]["origin_teacher"]:
+    if "teacher_origin" in results["models"] and "error" not in results["models"]["teacher_origin"]:
         logger.info("Origin Teacher Model:")
-        logger.info(f"  - Perplexity: {results['models']['origin_teacher']['perplexity']:.4f}")
-        logger.info(f"  - F1 Score: {results['models']['origin_teacher']['f1_score']:.4f}")
-        logger.info(f"  - BLEU Score: {results['models']['origin_teacher']['bleu_score']:.4f}")
-        logger.info(f"  - Model Size: {results['models']['origin_teacher']['model_size_mb']:.2f}MB")
-        logger.info(f"  - Parameters: {results['models']['origin_teacher']['total_parameters']:,}")
+        logger.info(f"  - Perplexity: {results['models']['teacher_origin']['perplexity']:.4f}")
+        logger.info(f"  - F1 Score: {results['models']['teacher_origin']['f1_score']:.4f}")
+        logger.info(f"  - BLEU Score: {results['models']['teacher_origin']['bleu_score']:.4f}")
+        logger.info(f"  - ROUGE-1: {results['models']['teacher_origin']['rouge1']:.4f}")
+        logger.info(f"  - ROUGE-2: {results['models']['teacher_origin']['rouge2']:.4f}")
+        logger.info(f"  - ROUGE-L: {results['models']['teacher_origin']['rougeL']:.4f}")
+        logger.info(f"  - Model Size: {results['models']['teacher_origin']['model_size_mb']:.2f}MB")
+        logger.info(f"  - Parameters: {results['models']['teacher_origin']['total_parameters']:,}")
 
     if "original_student" in results["models"] and "error" not in results["models"][
             "original_student"]:
@@ -571,6 +463,9 @@ def evaluate_models(config):  # noqa: C901
         logger.info(f"  - Perplexity: {results['models']['original_student']['perplexity']:.4f}")
         logger.info(f"  - F1 Score: {results['models']['original_student']['f1_score']:.4f}")
         logger.info(f"  - BLEU Score: {results['models']['original_student']['bleu_score']:.4f}")
+        logger.info(f"  - ROUGE-1: {results['models']['original_student']['rouge1']:.4f}")
+        logger.info(f"  - ROUGE-2: {results['models']['original_student']['rouge2']:.4f}")
+        logger.info(f"  - ROUGE-L: {results['models']['original_student']['rougeL']:.4f}")
         logger.info(
             f"  - Model Size: {results['models']['original_student']['model_size_mb']:.2f}MB")
         logger.info(
@@ -582,31 +477,13 @@ def evaluate_models(config):  # noqa: C901
         logger.info(f"  - Perplexity: {results['models']['distilled_student']['perplexity']:.4f}")
         logger.info(f"  - F1 Score: {results['models']['distilled_student']['f1_score']:.4f}")
         logger.info(f"  - BLEU Score: {results['models']['distilled_student']['bleu_score']:.4f}")
+        logger.info(f"  - ROUGE-1: {results['models']['distilled_student']['rouge1']:.4f}")
+        logger.info(f"  - ROUGE-2: {results['models']['distilled_student']['rouge2']:.4f}")
+        logger.info(f"  - ROUGE-L: {results['models']['distilled_student']['rougeL']:.4f}")
         logger.info(
             f"  - Model Size: {results['models']['distilled_student']['model_size_mb']:.2f}MB")
         logger.info(
             f"  - Parameters: {results['models']['distilled_student']['total_parameters']:,}")
-
-    if "comparison" in results and results["comparison"]:
-        logger.info("Comparison Metrics:")
-
-        if "distilled_vs_original_student" in results["comparison"]:
-            comp = results["comparison"]["distilled_vs_original_student"]
-            logger.info("  Distilled vs Original Student:")
-            logger.info(f"    - Perplexity Improvement: {comp['perplexity_improvement']:.2f}%")
-            logger.info(f"    - Perplexity Ratio: {comp['perplexity_ratio']:.4f}")
-
-        if "original_student_vs_teacher" in results["comparison"]:
-            comp = results["comparison"]["original_student_vs_teacher"]
-            logger.info("  Original Student vs Teacher:")
-            logger.info(f"    - Perplexity Gap: {comp['perplexity_gap']:.4f}")
-            logger.info(f"    - Perplexity Ratio: {comp['perplexity_ratio']:.4f}")
-
-        if "distilled_student_vs_teacher" in results["comparison"]:
-            comp = results["comparison"]["distilled_student_vs_teacher"]
-            logger.info("  Distilled Student vs Teacher:")
-            logger.info(f"    - Perplexity Gap: {comp['perplexity_gap']:.4f}")
-            logger.info(f"    - Perplexity Ratio: {comp['perplexity_ratio']:.4f}")
 
     logger.info("=" * 80)
 

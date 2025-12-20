@@ -104,7 +104,12 @@ def generate_response(
 
     # Format the prompt using the chat template
     messages = [{"role": "user", "content": message}]
-    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False,
+    )
 
     # Generate response
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
@@ -117,7 +122,6 @@ def generate_response(
             temperature=temperature,
             top_p=top_p,
             do_sample=True,
-            pad_token_id=tokenizer.eos_token_id,
         )
 
     # Decode the response

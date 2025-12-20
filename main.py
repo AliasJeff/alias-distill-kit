@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import os
 import sys
 
 from src.config import CONFIG
@@ -254,24 +255,38 @@ def generate_samples(config, num_samples=5, prompts=None):
 
                 # Use apply_chat_template to format the prompt
                 messages = [{"role": "user", "content": question}]
-                prompt = tokenizer.apply_chat_template(messages,
-                                                       tokenize=False,
-                                                       add_generation_prompt=True)
+                prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
 
                 inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-                generated_ids = model.generate(**inputs,
-                                               max_new_tokens=config["tokenizer"]["max_new_tokens"],
-                                               num_beams=1,
-                                               temperature=0.7,
-                                               top_p=0.9,
-                                               do_sample=True,
-                                               eos_token_id=tokenizer.eos_token_id,
-                                               pad_token_id=tokenizer.eos_token_id)
+                generated_ids = model.generate(
+                    **inputs,
+                    max_new_tokens=config["tokenizer"]["max_new_tokens"],
+                    num_beams=1,
+                    temperature=0.7,
+                    top_p=0.8,
+                    do_sample=True,
+                )
 
-                # Decode only the generated part
-                generated_text = tokenizer.decode(generated_ids[0][inputs["input_ids"].shape[1]:],
-                                                  skip_special_tokens=True)
-                logger.info(f"Output: {generated_text}\n")
+                output_ids = generated_ids[0][len(inputs.input_ids[0]):].tolist()
+
+                # Parse thinking content
+                try:
+                    # NOTE: 151668 is the Qwen token ID for </think>
+                    index = len(output_ids) - output_ids[::-1].index(151668)
+                except ValueError:
+                    index = 0
+
+                thinking_content = tokenizer.decode(output_ids[:index],
+                                                    skip_special_tokens=True).strip("\n")
+                content = tokenizer.decode(output_ids[index:], skip_special_tokens=True).strip("\n")
+
+                logger.info(f"Thinking: {thinking_content}")
+                logger.info(f"Content: {content}")
 
         logger.info("=" * 60)
         logger.info("Sample generation completed!")
@@ -300,7 +315,7 @@ def test_model_outputs(  # noqa: C901
         output_file=None,
 ):
     """Test model outputs with various metrics.
-    
+
     Args:
         model_path: Path to the model to test
         num_samples: Number of test samples to generate
@@ -368,9 +383,12 @@ def test_model_outputs(  # noqa: C901
 
                     # Use apply_chat_template to format the prompt
                     messages = [{"role": "user", "content": question}]
-                    prompt = tokenizer.apply_chat_template(messages,
-                                                           tokenize=False,
-                                                           add_generation_prompt=True)
+                    prompt = tokenizer.apply_chat_template(
+                        messages,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                        enable_thinking=False,
+                    )
 
                     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
                     generated_ids = model.generate(
@@ -378,29 +396,38 @@ def test_model_outputs(  # noqa: C901
                         max_new_tokens=CONFIG["tokenizer"]["max_new_tokens"],
                         num_beams=1,
                         temperature=0.7,
-                        top_p=0.9,
+                        top_p=0.8,
                         do_sample=True,
-                        eos_token_id=tokenizer.eos_token_id,
-                        pad_token_id=tokenizer.eos_token_id,
                     )
 
                     elapsed_time = time.time() - start_time
                     total_time += elapsed_time
 
-                    # Decode only the generated part
-                    generated_text = tokenizer.decode(
-                        generated_ids[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+                    output_ids = generated_ids[0][len(inputs.input_ids[0]):].tolist()
+
+                    # Parse thinking content
+                    try:
+                        # NOTE: 151668 is the Qwen token ID for </think>
+                        index = len(output_ids) - output_ids[::-1].index(151668)
+                    except ValueError:
+                        index = 0
+
+                    thinking_content = tokenizer.decode(output_ids[:index],
+                                                        skip_special_tokens=True).strip("\n")
+                    content = tokenizer.decode(output_ids[index:],
+                                               skip_special_tokens=True).strip("\n")
 
                     output_info = {
                         "question": question,
-                        "output": generated_text,
-                        "output_length": len(generated_text.split()),
+                        "thinking_content": thinking_content,
+                        "output": content,
+                        "output_length": len(content.split()),
                         "generation_time": elapsed_time
                     }
                     outputs.append(output_info)
 
                     logger.info(
-                        f"  [{i}/{len(test_prompts)}] Generated {len(generated_text.split())} tokens in {elapsed_time:.2f}s"
+                        f"  [{i}/{len(test_prompts)}] Generated {len(content.split())} tokens in {elapsed_time:.2f}s"
                     )
 
             # Calculate statistics
@@ -446,39 +473,70 @@ def test_model_outputs(  # noqa: C901
         teacher_model_path = CONFIG["models"]["teacher"]
         test_results["models"]["teacher"] = test_single_model("Teacher Model", teacher_model_path)
 
-        # Compare metrics
-        target_results = test_results["models"]["target_model"]
-        original_results = test_results["models"]["original_student"]
-        teacher_results = test_results["models"]["teacher"]
+        logger.info("\n" + "-" * 70)
+        original_teacher_model_path = CONFIG["models"]["teacher_origin"]
+        test_results["models"]["original_teacher"] = test_single_model(
+            "Original Teacher Model", original_teacher_model_path)
 
-        if ("error" not in target_results and "error" not in original_results
-                and "error" not in teacher_results):
-            target_time = target_results["average_generation_time"]
-            original_time = original_results["average_generation_time"]
-            teacher_time = teacher_results["average_generation_time"]
+    # Compare metrics if any comparison is enabled
+    if compare_original:
+        target_results = test_results["models"].get("target_model", {})
+        original_student_results = test_results["models"].get("original_student", {})
+        teacher_results = test_results["models"].get("teacher", {})
+        original_teacher_results = test_results["models"].get("teacher_origin", {})
 
-            speedup_vs_original = original_time / target_time if target_time > 0 else 0
-            speedup_vs_teacher = teacher_time / target_time if target_time > 0 else 0
+        if "error" not in target_results:
+            target_time = target_results.get("average_generation_time", 0)
+            comparison_data = {"target_avg_time": float(target_time)}
+            log_messages = [f"  - Target model avg time: {target_time:.3f}s"]
 
-            test_results["comparison"] = {
-                "target_avg_time": float(target_time),
-                "original_student_avg_time": float(original_time),
-                "teacher_avg_time": float(teacher_time),
-                "speedup_vs_original": float(speedup_vs_original),
-                "speedup_vs_teacher": float(speedup_vs_teacher)
-            }
+            if compare_original and "error" not in original_student_results:
+                original_student_time = original_student_results.get("average_generation_time", 0)
+                speedup_vs_student = original_student_time / target_time if target_time > 0 else 0
+                comparison_data.update({
+                    "original_student_avg_time": float(original_student_time),
+                    "speedup_vs_original_student": float(speedup_vs_student)
+                })
+                log_messages.append(
+                    f"  - Original student model avg time: {original_student_time:.3f}s")
+                log_messages.append(f"  - Speedup vs Original Student: {speedup_vs_student:.2f}x")
 
+            if compare_original and "error" not in teacher_results:
+                teacher_time = teacher_results.get("average_generation_time", 0)
+                speedup_vs_teacher = teacher_time / target_time if target_time > 0 else 0
+                comparison_data.update({
+                    "teacher_avg_time": float(teacher_time),
+                    "speedup_vs_teacher": float(speedup_vs_teacher)
+                })
+                log_messages.append(f"  - Teacher model avg time: {teacher_time:.3f}s")
+                log_messages.append(f"  - Speedup vs Teacher: {speedup_vs_teacher:.2f}x")
+
+            if compare_original and "error" not in original_teacher_results:
+                original_teacher_time = original_teacher_results.get("average_generation_time", 0)
+                speedup_vs_original_teacher = original_teacher_time / target_time if target_time > 0 else 0
+                comparison_data.update({
+                    "original_teacher_avg_time":
+                    float(original_teacher_time),
+                    "speedup_vs_original_teacher":
+                    float(speedup_vs_original_teacher)
+                })
+                log_messages.append(
+                    f"  - Original teacher model avg time: {original_teacher_time:.3f}s")
+                log_messages.append(
+                    f"  - Speedup vs Original Teacher: {speedup_vs_original_teacher:.2f}x")
+
+            test_results["comparison"] = comparison_data
             logger.info("\n" + "-" * 70)
             logger.info("Comparison Results:")
-            logger.info(f"  - Target model avg time: {target_time:.3f}s")
-            logger.info(f"  - Original student model avg time: {original_time:.3f}s")
-            logger.info(f"  - Teacher model avg time: {teacher_time:.3f}s")
-            logger.info("\nSpeedup ratios:")
-            logger.info(f"  - Target vs Original Student: {speedup_vs_original:.2f}x")
-            logger.info(f"  - Target vs Teacher: {speedup_vs_teacher:.2f}x")
+            for msg in log_messages:
+                logger.info(msg)
 
     # Save results
     try:
+        output_dir = os.path.dirname(output_file)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
         with open(output_file, 'w') as f:
             json.dump(test_results, f, indent=2)
         logger.info(f"\nTest results saved to {output_file}")
