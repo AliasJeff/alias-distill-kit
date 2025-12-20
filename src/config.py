@@ -65,8 +65,8 @@ CONFIG = {
         "port": 7860
     },
     "hub": {
-        "push_to_hub": False,
-        "repo_name": "qwen3-0.6b-medical-reasoning",
-        "repo_name_teacher": "qwen3-1.7b-medical-reasoning"
+        "push_to_hub": True,
+        "repo_name": "qwen3-0.6b-leet10k-student",
+        "repo_name_teacher": "qwen3-1.7b-leet10k-teacher"
     }
 }
