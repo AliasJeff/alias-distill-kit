@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import os
 import sys
 
 from src.config import CONFIG
@@ -479,6 +480,10 @@ def test_model_outputs(  # noqa: C901
 
     # Save results
     try:
+        output_dir = os.path.dirname(output_file)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
         with open(output_file, 'w') as f:
             json.dump(test_results, f, indent=2)
         logger.info(f"\nTest results saved to {output_file}")
