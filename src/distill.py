@@ -329,7 +329,6 @@ class LogitsTrainer(Trainer):
 
         # Move adaptation layer to correct device
         device = student_hidden_states[0].device
-        self.adaptation_layer = self.adaptation_layer.to(device)
 
         # Project student hidden states to teacher dimensions
         adapted_student_hidden_states = self.adaptation_layer(student_hidden_states)
@@ -431,6 +430,7 @@ def main():
         num_student_layers=student_model.config.num_hidden_layers,
         num_teacher_layers=teacher_model.config.num_hidden_layers,
         dtype=torch.bfloat16)
+    adaptation_layer = adaptation_layer.to(next(student_model.parameters()).device)
     logger.info(f"Adaptation layer created with {len(adaptation_layer.projections)} projections")
     student_model.adaptation_layer = adaptation_layer
 
@@ -455,7 +455,7 @@ def main():
     trainer.config_dict = config
 
     # Add the teacher model to the trainer
-    trainer.teacher_model = teacher_model.to(trainer.model.device)
+    trainer.teacher_model = teacher_model
 
     # Add the adaptation layer to the trainer for hidden state distillation
     trainer.adaptation_layer = adaptation_layer
