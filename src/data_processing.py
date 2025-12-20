@@ -94,7 +94,7 @@ def leet10k_format(example, tokenizer, config, mode="train"):
     }
 
 
-def add_assistant_labels(example, tokenizer):
+def add_assistant_labels(example, tokenizer):  # noqa: C901
     input_ids = example["input_ids"]
     labels = [-100] * len(input_ids)
 
@@ -107,24 +107,30 @@ def add_assistant_labels(example, tokenizer):
         if input_ids[i:i + len(assistant_start)] == assistant_start:
             j = i + len(assistant_start)
 
+            found_end = False
             while j < len(input_ids):
                 if input_ids[j:j + len(assistant_end)] == assistant_end:
+                    found_end = True
+
                     for k in range(j, j + len(assistant_end)):
                         labels[k] = input_ids[k]
 
-                    eos_pos = j + len(assistant_end)
-                    if eos_id is not None and eos_pos < len(input_ids):
-                        if input_ids[eos_pos] == eos_id:
-                            labels[eos_pos] = eos_id
-                            logger.debug("Supervised EOS after <|im_end|>")
+                    search_start = j + len(assistant_end)
+                    for k in range(search_start, len(input_ids)):
+                        if input_ids[k] == eos_id:
+                            labels[k] = eos_id
+                            break
 
+                    i = search_start
                     break
 
                 labels[j] = input_ids[j]
                 j += 1
 
-            i = j
-        i += 1
+            if not found_end:
+                i = j
+        else:
+            i += 1
 
     example["labels"] = labels
     return example
@@ -282,13 +288,10 @@ def sanity_check_dataset(dataset, tokenizer, num_samples=3):  # noqa: C901
         logger.info("✅ <|im_end|> is supervised")
 
         # 4. EOS check (if exists)
-        if eos_id is not None:
-            if eos_id in input_ids:
-                eos_pos = input_ids.index(eos_id)
-                assert labels[eos_pos] == eos_id, "❌ EOS token exists but is NOT supervised"
-                logger.info("✅ EOS token is supervised")
-            else:
-                logger.info("ℹ️ EOS token not present in this sample")
+        if eos_id is not None and eos_id in input_ids:
+            eos_pos = len(input_ids) - 1 - input_ids[::-1].index(eos_id)  # Last EOS
+            assert labels[eos_pos] == eos_id, "❌ EOS token exists but is NOT supervised"
+            logger.info("✅ EOS token is supervised")
 
         # 5. Defensive check: user tokens should not be supervised
         user_start = tokenizer("<|im_start|>user", add_special_tokens=False)["input_ids"]
