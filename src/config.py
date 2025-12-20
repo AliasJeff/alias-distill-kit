@@ -20,23 +20,19 @@ CONFIG = {
         4096,
         "max_new_tokens":
         512,
-        "chat_template":
-        ("{%- for message in messages -%}"
-         "{%- if loop.first and messages[0]['role'] != 'system' -%}"
-         "<|im_start|>system\n"
-         "You are a helpful assistant, you MUST NOT reveal your chain-of-thought, "
-         "MUST NOT output any reasoning or thinking process, you must never output "
-         "<think> or </think> tags or any content within those tags, always ONLY "
-         "provide the final answer."
-         "<|im_end|>\n"
-         "{%- endif -%}"
-         "<|im_start|>{{ message['role'] }}\n"
-         "{{ message['content'] }}"
-         "<|im_end|>\n"
-         "{%- endfor -%}"
-         "{%- if add_generation_prompt -%}"
-         "<|im_start|>assistant\n"
-         "{%- endif -%}")
+        "chat_template": ("{%- for message in messages -%}"
+                          "{%- if loop.first and messages[0]['role'] != 'system' -%}"
+                          "<|im_start|>system\n"
+                          "You are a helpful assistant. /no_think"
+                          "<|im_end|>\n"
+                          "{%- endif -%}"
+                          "<|im_start|>{{ message['role'] }}\n"
+                          "{{ message['content'] }}"
+                          "<|im_end|>\n"
+                          "{%- endfor -%}"
+                          "{%- if add_generation_prompt -%}"
+                          "<|im_start|>assistant\n"
+                          "{%- endif -%}")
     },
     "training": {
         "output_dir": "results",

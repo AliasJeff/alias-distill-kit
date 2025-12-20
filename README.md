@@ -2,6 +2,8 @@
 
 Comprehensive knowledge distillation framework for training efficient student models using combined logits and hidden state distillation from teacher models.
 
+| NOTE: Only for Qwen models.
+
 ## Overview
 
 alias-distill-kit is a comprehensive knowledge distillation toolkit that enables you to:
