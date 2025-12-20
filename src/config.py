@@ -17,9 +17,9 @@ CONFIG = {
     },
     "tokenizer": {
         "max_length":
-        4096,
+        38912,
         "max_new_tokens":
-        512,
+        32768,
         "chat_template": ("{%- for message in messages -%}"
                           "{%- if loop.first and messages[0]['role'] != 'system' -%}"
                           "<|im_start|>system\n"

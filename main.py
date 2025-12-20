@@ -255,24 +255,38 @@ def generate_samples(config, num_samples=5, prompts=None):
 
                 # Use apply_chat_template to format the prompt
                 messages = [{"role": "user", "content": question}]
-                prompt = tokenizer.apply_chat_template(messages,
-                                                       tokenize=False,
-                                                       add_generation_prompt=True)
+                prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
 
                 inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-                generated_ids = model.generate(**inputs,
-                                               max_new_tokens=config["tokenizer"]["max_new_tokens"],
-                                               num_beams=1,
-                                               temperature=0.7,
-                                               top_p=0.9,
-                                               do_sample=True,
-                                               eos_token_id=tokenizer.eos_token_id,
-                                               pad_token_id=tokenizer.eos_token_id)
+                generated_ids = model.generate(
+                    **inputs,
+                    max_new_tokens=config["tokenizer"]["max_new_tokens"],
+                    num_beams=1,
+                    temperature=0.7,
+                    top_p=0.8,
+                    do_sample=True,
+                )
 
-                # Decode only the generated part
-                generated_text = tokenizer.decode(generated_ids[0][inputs["input_ids"].shape[1]:],
-                                                  skip_special_tokens=True)
-                logger.info(f"Output: {generated_text}\n")
+                output_ids = generated_ids[0][len(inputs.input_ids[0]):].tolist()
+
+                # Parse thinking content
+                try:
+                    # NOTE: 151668 is the Qwen token ID for </think>
+                    index = len(output_ids) - output_ids[::-1].index(151668)
+                except ValueError:
+                    index = 0
+
+                thinking_content = tokenizer.decode(output_ids[:index],
+                                                    skip_special_tokens=True).strip("\n")
+                content = tokenizer.decode(output_ids[index:], skip_special_tokens=True).strip("\n")
+
+                logger.info(f"Thinking: {thinking_content}")
+                logger.info(f"Content: {content}")
 
         logger.info("=" * 60)
         logger.info("Sample generation completed!")
@@ -369,9 +383,12 @@ def test_model_outputs(  # noqa: C901
 
                     # Use apply_chat_template to format the prompt
                     messages = [{"role": "user", "content": question}]
-                    prompt = tokenizer.apply_chat_template(messages,
-                                                           tokenize=False,
-                                                           add_generation_prompt=True)
+                    prompt = tokenizer.apply_chat_template(
+                        messages,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                        enable_thinking=False,
+                    )
 
                     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
                     generated_ids = model.generate(
@@ -379,29 +396,38 @@ def test_model_outputs(  # noqa: C901
                         max_new_tokens=CONFIG["tokenizer"]["max_new_tokens"],
                         num_beams=1,
                         temperature=0.7,
-                        top_p=0.9,
+                        top_p=0.8,
                         do_sample=True,
-                        eos_token_id=tokenizer.eos_token_id,
-                        pad_token_id=tokenizer.eos_token_id,
                     )
 
                     elapsed_time = time.time() - start_time
                     total_time += elapsed_time
 
-                    # Decode only the generated part
-                    generated_text = tokenizer.decode(
-                        generated_ids[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+                    output_ids = generated_ids[0][len(inputs.input_ids[0]):].tolist()
+
+                    # Parse thinking content
+                    try:
+                        # NOTE: 151668 is the Qwen token ID for </think>
+                        index = len(output_ids) - output_ids[::-1].index(151668)
+                    except ValueError:
+                        index = 0
+
+                    thinking_content = tokenizer.decode(output_ids[:index],
+                                                        skip_special_tokens=True).strip("\n")
+                    content = tokenizer.decode(output_ids[index:],
+                                               skip_special_tokens=True).strip("\n")
 
                     output_info = {
                         "question": question,
-                        "output": generated_text,
-                        "output_length": len(generated_text.split()),
+                        "thinking_content": thinking_content,
+                        "output": content,
+                        "output_length": len(content.split()),
                         "generation_time": elapsed_time
                     }
                     outputs.append(output_info)
 
                     logger.info(
-                        f"  [{i}/{len(test_prompts)}] Generated {len(generated_text.split())} tokens in {elapsed_time:.2f}s"
+                        f"  [{i}/{len(test_prompts)}] Generated {len(content.split())} tokens in {elapsed_time:.2f}s"
                     )
 
             # Calculate statistics

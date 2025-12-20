@@ -238,6 +238,7 @@ def generate_predictions(model, tokenizer, dataset, max_samples=100, batch_size=
                     messages,
                     tokenize=False,
                     add_generation_prompt=True,
+                    enable_thinking=False,
                 )
                 prompts.append(prompt)
 
@@ -250,7 +251,6 @@ def generate_predictions(model, tokenizer, dataset, max_samples=100, batch_size=
                 max_new_tokens=CONFIG["tokenizer"]["max_new_tokens"],
                 num_beams=1,
                 do_sample=False,
-                pad_token_id=tokenizer.eos_token_id,
             )
 
             for idx in range(len(prompts)):

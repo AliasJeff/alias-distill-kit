@@ -50,6 +50,7 @@ def mbpp_format(example, tokenizer, config, mode="train"):
         message,
         tokenize=False,
         add_generation_prompt=add_generation_prompt,
+        enable_thinking=False,
     )
 
     # Return formatted text along with original fields for later use
@@ -82,6 +83,7 @@ def leet10k_format(example, tokenizer, config, mode="train"):
         message,
         tokenize=False,
         add_generation_prompt=add_generation_prompt,
+        enable_thinking=False,
     )
 
     # Return formatted text along with original fields for later use

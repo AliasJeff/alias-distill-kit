@@ -182,6 +182,7 @@ class PeriodicTestCallback(TrainerCallback):
                                 messages,
                                 tokenize=False,
                                 add_generation_prompt=True,
+                                enable_thinking=False,
                             )
                             gen_inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
                             gen_output = model.generate(
