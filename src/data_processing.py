@@ -100,16 +100,29 @@ def add_assistant_labels(example, tokenizer):
 
     assistant_start = tokenizer("<|im_start|>assistant", add_special_tokens=False)["input_ids"]
     assistant_end = tokenizer("<|im_end|>", add_special_tokens=False)["input_ids"]
+    eos_id = tokenizer.eos_token_id
 
     i = 0
     while i < len(input_ids):
         if input_ids[i:i + len(assistant_start)] == assistant_start:
             j = i + len(assistant_start)
+
             while j < len(input_ids):
                 if input_ids[j:j + len(assistant_end)] == assistant_end:
+                    for k in range(j, j + len(assistant_end)):
+                        labels[k] = input_ids[k]
+
+                    eos_pos = j + len(assistant_end)
+                    if eos_id is not None and eos_pos < len(input_ids):
+                        if input_ids[eos_pos] == eos_id:
+                            labels[eos_pos] = eos_id
+                            logger.debug("Supervised EOS after <|im_end|>")
+
                     break
+
                 labels[j] = input_ids[j]
                 j += 1
+
             i = j
         i += 1
 
@@ -219,36 +232,72 @@ def prepare_dataset(dataset, student_tokenizer, config, mode="train"):
     return tokenized_dataset
 
 
-def sanity_check_dataset(dataset, tokenizer, num_samples=3):
+def sanity_check_dataset(dataset, tokenizer, num_samples=3):  # noqa: C901
     logger.info("=" * 80)
-    logger.info("RUNNING SANITY CHECK ON DATASET")
+    logger.info("RUNNING ENHANCED SANITY CHECK ON DATASET (EOS FOCUSED)")
     logger.info("=" * 80)
 
-    for i in range(num_samples):
-        sample = dataset[i]
+    assistant_start = tokenizer("<|im_start|>assistant", add_special_tokens=False)["input_ids"]
+    assistant_end = tokenizer("<|im_end|>", add_special_tokens=False)["input_ids"]
+    eos_id = tokenizer.eos_token_id
 
+    for idx in range(num_samples):
+        sample = dataset[idx]
         input_ids = sample["input_ids"]
         labels = sample["labels"]
 
         decoded = tokenizer.decode(input_ids, skip_special_tokens=False)
 
-        labeled_tokens = [tokenizer.decode([t]) for t in labels if t != -100]
-
-        logger.info(f"\n--- Sample {i} ---")
+        logger.info(f"\n--- Sample {idx} ---")
         logger.info("FULL INPUT:")
         logger.info(decoded)
 
-        logger.info("\nLABELED TOKENS (first 50):")
-        logger.info("".join(labeled_tokens[:50]))
+        # 1. Find assistant start and end
+        start_pos = None
+        end_pos = None
 
-        assert any(t != -100 for t in labels), "❌ No supervised tokens found!"
-        assert "<|im_start|>assistant" in decoded, "❌ Assistant tag missing!"
+        for i in range(len(input_ids)):
+            if input_ids[i:i + len(assistant_start)] == assistant_start:
+                start_pos = i + len(assistant_start)
+                break
 
-        # sanity: user tokens should NOT be labeled
-        user_tokens = tokenizer("<|im_start|>user", add_special_tokens=False)["input_ids"]
-        for i in range(len(labels) - len(user_tokens)):
-            if input_ids[i:i + len(user_tokens)] == user_tokens:
-                assert all(labels[j] == -100 for j in range(i, i + len(user_tokens)))
+        assert start_pos is not None, "❌ Assistant start not found"
 
-    logger.info("✅ SANITY CHECK PASSED")
+        for j in range(start_pos, len(input_ids)):
+            if input_ids[j:j + len(assistant_end)] == assistant_end:
+                end_pos = j
+                break
+
+        assert end_pos is not None, "❌ Assistant end (<|im_end|>) not found"
+
+        # 2. assistant content must be supervised
+        supervised_content = [labels[k] != -100 for k in range(start_pos, end_pos)]
+        assert any(supervised_content), "❌ No supervised assistant content"
+
+        # 3. assistant_end must be supervised
+        end_len = len(assistant_end)
+        for k in range(end_pos, end_pos + end_len):
+            assert labels[k] == input_ids[k], "❌ <|im_end|> is NOT supervised"
+
+        logger.info("✅ <|im_end|> is supervised")
+
+        # 4. EOS check (if exists)
+        if eos_id is not None:
+            if eos_id in input_ids:
+                eos_pos = input_ids.index(eos_id)
+                assert labels[eos_pos] == eos_id, "❌ EOS token exists but is NOT supervised"
+                logger.info("✅ EOS token is supervised")
+            else:
+                logger.info("ℹ️ EOS token not present in this sample")
+
+        # 5. Defensive check: user tokens should not be supervised
+        user_start = tokenizer("<|im_start|>user", add_special_tokens=False)["input_ids"]
+        for i in range(len(input_ids) - len(user_start)):
+            if input_ids[i:i + len(user_start)] == user_start:
+                assert all(labels[j] == -100 for j in range(i, i + len(user_start))), \
+                    "❌ User tokens are supervised!"
+
+        logger.info("✅ Sample passed EOS sanity check")
+
+    logger.info("🎉 ALL SANITY CHECKS PASSED")
     logger.info("=" * 80)

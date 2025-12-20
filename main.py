@@ -270,6 +270,8 @@ def generate_samples(config, num_samples=5, prompts=None):
                     temperature=0.7,
                     top_p=0.8,
                     do_sample=True,
+                    repetition_penalty=1.2,
+                    no_repeat_ngram_size=6,
                 )
 
                 output_ids = generated_ids[0][len(inputs.input_ids[0]):].tolist()
@@ -398,6 +400,8 @@ def test_model_outputs(  # noqa: C901
                         temperature=0.7,
                         top_p=0.8,
                         do_sample=True,
+                        repetition_penalty=1.2,
+                        no_repeat_ngram_size=6,
                     )
 
                     elapsed_time = time.time() - start_time

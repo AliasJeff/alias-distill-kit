@@ -188,6 +188,8 @@ class PeriodicTestCallback(TrainerCallback):
                             gen_output = model.generate(
                                 **gen_inputs,
                                 max_new_tokens=CONFIG["tokenizer"]["max_new_tokens"],
+                                repetition_penalty=1.2,
+                                no_repeat_ngram_size=6,
                             )
                             decoded_gen = tokenizer.decode(gen_output[0], skip_special_tokens=True)
                             logger.info(f"\nModel Output:\n{decoded_gen}")

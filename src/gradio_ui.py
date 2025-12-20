@@ -122,6 +122,8 @@ def generate_response(
             temperature=temperature,
             top_p=top_p,
             do_sample=True,
+            repetition_penalty=1.2,
+            no_repeat_ngram_size=6,
         )
 
     # Decode the response
