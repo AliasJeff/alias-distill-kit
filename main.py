@@ -3,6 +3,7 @@
 import argparse
 import logging
 import os
+import subprocess
 import sys
 
 from src.config import CONFIG
@@ -14,6 +15,10 @@ from src.evaluate import evaluate_models
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+def run_stage(cmd):
+    subprocess.run([sys.executable] + cmd, check=True)
 
 
 def setup_parser():
@@ -573,25 +578,26 @@ def all_command(args):
     """Execute the full pipeline command."""
     logger.info("Starting full pipeline...")
     try:
+
         # 1. Train teacher
         logger.info("\nSTEP 1: Training teacher model...")
-        train_teacher_main()
+        run_stage(["main.py", "train-teacher"])
         logger.info("Teacher model training completed successfully!")
 
         # 2. Distill student
         logger.info("\nSTEP 2: Distilling student model...")
-        distill_main()
+        run_stage(["main.py", "distill"])
         logger.info("Student model distillation completed successfully!")
 
         # 3. Evaluate
         logger.info("\nSTEP 3: Evaluating models...")
-        evaluate_models(CONFIG)
+        run_stage(["main.py", "evaluate"])
         logger.info("Evaluation completed successfully!")
 
         # 4. Generate samples if requested
         if args.generate_samples:
             logger.info("\nSTEP 4: Generating sample outputs...")
-            generate_samples(CONFIG, num_samples=args.num_samples)
+            run_stage(["main.py", "generate", "--num-samples", "3"])
 
         logger.info("\nFull pipeline completed successfully!")
 
