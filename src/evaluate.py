@@ -11,6 +11,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm import tqdm
 from sacrebleu import BLEU
 from collections import Counter
+from rouge_score import rouge_scorer
 
 from .config import CONFIG
 from .data_processing import load_dataset_split
@@ -170,6 +171,44 @@ def compute_f1(predictions, references):
         return 0.0
 
 
+def compute_rouge(predictions, references):
+    """Compute ROUGE scores (ROUGE-1, ROUGE-2, ROUGE-L).
+
+    Args:
+        predictions: List of predicted texts
+        references: List of reference texts
+
+    Returns:
+        Dictionary with ROUGE-1, ROUGE-2, ROUGE-L F1 scores
+    """
+    scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
+    rouge_scores = {
+        'rouge1': [],
+        'rouge2': [],
+        'rougeL': [],
+    }
+
+    try:
+        for pred, ref in zip(predictions, references):
+            if isinstance(ref, list):
+                ref = ref[0]
+
+            scores = scorer.score(ref, pred)
+            rouge_scores['rouge1'].append(scores['rouge1'].fmeasure)
+            rouge_scores['rouge2'].append(scores['rouge2'].fmeasure)
+            rouge_scores['rougeL'].append(scores['rougeL'].fmeasure)
+
+        avg_rouge_scores = {
+            key: (sum(val) / len(val)) * 100 if val else 0.0
+            for key, val in rouge_scores.items()
+        }
+
+        return avg_rouge_scores
+    except Exception as e:
+        logger.warning(f"Error computing ROUGE score: {e}")
+        return {'rouge1': 0.0, 'rouge2': 0.0, 'rougeL': 0.0}
+
+
 def generate_predictions(model, tokenizer, dataset, max_samples=100, batch_size=8):
     model.eval()
     device = next(model.parameters()).device
@@ -288,9 +327,10 @@ def evaluate_models(config):  # noqa: C901
                                                        test_dataset,
                                                        max_samples=100)
 
-        # Compute F1 and BLEU
+        # Compute F1, BLEU, and ROUGE
         f1_score = compute_f1(predictions, references)
         bleu_score = compute_bleu(predictions, references)
+        rouge_scores = compute_rouge(predictions, references)
 
         results["models"]["teacher"] = {
             "model_name": config["models"]["teacher"],
@@ -301,10 +341,13 @@ def evaluate_models(config):  # noqa: C901
             "average_loss": float(avg_loss),
             "f1_score": float(f1_score),
             "bleu_score": float(bleu_score),
+            "rouge1": float(rouge_scores['rouge1']),
+            "rouge2": float(rouge_scores['rouge2']),
+            "rougeL": float(rouge_scores['rougeL']),
         }
 
         logger.info(
-            f"Teacher model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, Size: {model_size:.2f}MB"
+            f"Teacher model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, ROUGE-L: {rouge_scores['rougeL']:.4f}, Size: {model_size:.2f}MB"
         )
 
         del teacher_model
@@ -342,9 +385,10 @@ def evaluate_models(config):  # noqa: C901
                                                        test_dataset,
                                                        max_samples=100)
 
-        # Compute F1 and BLEU
+        # Compute F1, BLEU, and ROUGE
         f1_score = compute_f1(predictions, references)
         bleu_score = compute_bleu(predictions, references)
+        rouge_scores = compute_rouge(predictions, references)
 
         results["models"]["teacher_origin"] = {
             "model_name": config["models"]["teacher_origin"],
@@ -355,10 +399,13 @@ def evaluate_models(config):  # noqa: C901
             "average_loss": float(avg_loss),
             "f1_score": float(f1_score),
             "bleu_score": float(bleu_score),
+            "rouge1": float(rouge_scores['rouge1']),
+            "rouge2": float(rouge_scores['rouge2']),
+            "rougeL": float(rouge_scores['rougeL']),
         }
 
         logger.info(
-            f"Origin teacher model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, Size: {model_size:.2f}MB"
+            f"Origin teacher model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, ROUGE-L: {rouge_scores['rougeL']:.4f}, Size: {model_size:.2f}MB"
         )
 
         del origin_teacher_model
@@ -393,9 +440,10 @@ def evaluate_models(config):  # noqa: C901
                                                        test_dataset,
                                                        max_samples=100)
 
-        # Compute F1 and BLEU
+        # Compute F1, BLEU, and ROUGE
         f1_score = compute_f1(predictions, references)
         bleu_score = compute_bleu(predictions, references)
+        rouge_scores = compute_rouge(predictions, references)
 
         results["models"]["original_student"] = {
             "model_name": config["models"]["student"],
@@ -406,10 +454,13 @@ def evaluate_models(config):  # noqa: C901
             "average_loss": float(avg_loss),
             "f1_score": float(f1_score),
             "bleu_score": float(bleu_score),
+            "rouge1": float(rouge_scores['rouge1']),
+            "rouge2": float(rouge_scores['rouge2']),
+            "rougeL": float(rouge_scores['rougeL']),
         }
 
         logger.info(
-            f"Original student model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, Size: {model_size:.2f}MB"
+            f"Original student model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, ROUGE-L: {rouge_scores['rougeL']:.4f}, Size: {model_size:.2f}MB"
         )
 
         del student_model
@@ -459,10 +510,13 @@ def evaluate_models(config):  # noqa: C901
                 "average_loss": float(avg_loss),
                 "f1_score": float(f1_score),
                 "bleu_score": float(bleu_score),
+                "rouge1": float(rouge_scores['rouge1']),
+                "rouge2": float(rouge_scores['rouge2']),
+                "rougeL": float(rouge_scores['rougeL']),
             }
 
             logger.info(
-                f"Distilled student model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, Size: {model_size:.2f}MB"
+                f"Distilled student model - Perplexity: {perplexity:.4f}, F1: {f1_score:.4f}, BLEU: {bleu_score:.4f}, ROUGE-L: {rouge_scores['rougeL']:.4f}, Size: {model_size:.2f}MB"
             )
 
             del distilled_model
@@ -476,58 +530,6 @@ def evaluate_models(config):  # noqa: C901
         results["models"]["distilled_student"] = {
             "error": f"Model not found at {distilled_model_path}"
         }
-
-    # Compute comparison metrics
-    results["comparison"] = {}
-
-    # Compare distilled vs original student
-    if "original_student" in results["models"] and "distilled_student" in results["models"]:
-        if "error" not in results["models"]["original_student"] and "error" not in results[
-                "models"]["distilled_student"]:
-            original_ppl = results["models"]["original_student"]["perplexity"]
-            distilled_ppl = results["models"]["distilled_student"]["perplexity"]
-
-            results["comparison"]["distilled_vs_original_student"] = {
-                "perplexity_improvement": float(
-                    (original_ppl - distilled_ppl) / original_ppl * 100),
-                "perplexity_ratio": float(distilled_ppl / original_ppl),
-                "original_perplexity": float(original_ppl),
-                "distilled_perplexity": float(distilled_ppl),
-            }
-
-            logger.info(
-                f"Distilled vs Original Student - Perplexity improvement: {results['comparison']['distilled_vs_original_student']['perplexity_improvement']:.2f}%"
-            )
-
-    # Compare student models vs teacher
-    if "teacher" in results["models"] and "error" not in results["models"]["teacher"]:
-        teacher_ppl = results["models"]["teacher"]["perplexity"]
-
-        if "original_student" in results["models"] and "error" not in results["models"][
-                "original_student"]:
-            original_ppl = results["models"]["original_student"]["perplexity"]
-            results["comparison"]["original_student_vs_teacher"] = {
-                "perplexity_gap": float(original_ppl - teacher_ppl),
-                "perplexity_ratio": float(original_ppl / teacher_ppl),
-                "teacher_perplexity": float(teacher_ppl),
-                "student_perplexity": float(original_ppl),
-            }
-            logger.info(
-                f"Original Student vs Teacher - Perplexity gap: {results['comparison']['original_student_vs_teacher']['perplexity_gap']:.4f}, Ratio: {results['comparison']['original_student_vs_teacher']['perplexity_ratio']:.4f}"
-            )
-
-        if "distilled_student" in results["models"] and "error" not in results["models"][
-                "distilled_student"]:
-            distilled_ppl = results["models"]["distilled_student"]["perplexity"]
-            results["comparison"]["distilled_student_vs_teacher"] = {
-                "perplexity_gap": float(distilled_ppl - teacher_ppl),
-                "perplexity_ratio": float(distilled_ppl / teacher_ppl),
-                "teacher_perplexity": float(teacher_ppl),
-                "student_perplexity": float(distilled_ppl),
-            }
-            logger.info(
-                f"Distilled Student vs Teacher - Perplexity gap: {results['comparison']['distilled_student_vs_teacher']['perplexity_gap']:.4f}, Ratio: {results['comparison']['distilled_student_vs_teacher']['perplexity_ratio']:.4f}"
-            )
 
     # Save results
     results_file = results_dir / f"evaluation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -546,6 +548,9 @@ def evaluate_models(config):  # noqa: C901
         logger.info(f"  - Perplexity: {results['models']['teacher_origin']['perplexity']:.4f}")
         logger.info(f"  - F1 Score: {results['models']['teacher_origin']['f1_score']:.4f}")
         logger.info(f"  - BLEU Score: {results['models']['teacher_origin']['bleu_score']:.4f}")
+        logger.info(f"  - ROUGE-1: {results['models']['teacher_origin']['rouge1']:.4f}")
+        logger.info(f"  - ROUGE-2: {results['models']['teacher_origin']['rouge2']:.4f}")
+        logger.info(f"  - ROUGE-L: {results['models']['teacher_origin']['rougeL']:.4f}")
         logger.info(f"  - Model Size: {results['models']['teacher_origin']['model_size_mb']:.2f}MB")
         logger.info(f"  - Parameters: {results['models']['teacher_origin']['total_parameters']:,}")
 
@@ -554,6 +559,9 @@ def evaluate_models(config):  # noqa: C901
         logger.info(f"  - Perplexity: {results['models']['teacher']['perplexity']:.4f}")
         logger.info(f"  - F1 Score: {results['models']['teacher']['f1_score']:.4f}")
         logger.info(f"  - BLEU Score: {results['models']['teacher']['bleu_score']:.4f}")
+        logger.info(f"  - ROUGE-1: {results['models']['teacher']['rouge1']:.4f}")
+        logger.info(f"  - ROUGE-2: {results['models']['teacher']['rouge2']:.4f}")
+        logger.info(f"  - ROUGE-L: {results['models']['teacher']['rougeL']:.4f}")
         logger.info(f"  - Model Size: {results['models']['teacher']['model_size_mb']:.2f}MB")
         logger.info(f"  - Parameters: {results['models']['teacher']['total_parameters']:,}")
 
@@ -571,6 +579,9 @@ def evaluate_models(config):  # noqa: C901
         logger.info(f"  - Perplexity: {results['models']['original_student']['perplexity']:.4f}")
         logger.info(f"  - F1 Score: {results['models']['original_student']['f1_score']:.4f}")
         logger.info(f"  - BLEU Score: {results['models']['original_student']['bleu_score']:.4f}")
+        logger.info(f"  - ROUGE-1: {results['models']['original_student']['rouge1']:.4f}")
+        logger.info(f"  - ROUGE-2: {results['models']['original_student']['rouge2']:.4f}")
+        logger.info(f"  - ROUGE-L: {results['models']['original_student']['rougeL']:.4f}")
         logger.info(
             f"  - Model Size: {results['models']['original_student']['model_size_mb']:.2f}MB")
         logger.info(
@@ -582,31 +593,13 @@ def evaluate_models(config):  # noqa: C901
         logger.info(f"  - Perplexity: {results['models']['distilled_student']['perplexity']:.4f}")
         logger.info(f"  - F1 Score: {results['models']['distilled_student']['f1_score']:.4f}")
         logger.info(f"  - BLEU Score: {results['models']['distilled_student']['bleu_score']:.4f}")
+        logger.info(f"  - ROUGE-1: {results['models']['distilled_student']['rouge1']:.4f}")
+        logger.info(f"  - ROUGE-2: {results['models']['distilled_student']['rouge2']:.4f}")
+        logger.info(f"  - ROUGE-L: {results['models']['distilled_student']['rougeL']:.4f}")
         logger.info(
             f"  - Model Size: {results['models']['distilled_student']['model_size_mb']:.2f}MB")
         logger.info(
             f"  - Parameters: {results['models']['distilled_student']['total_parameters']:,}")
-
-    if "comparison" in results and results["comparison"]:
-        logger.info("Comparison Metrics:")
-
-        if "distilled_vs_original_student" in results["comparison"]:
-            comp = results["comparison"]["distilled_vs_original_student"]
-            logger.info("  Distilled vs Original Student:")
-            logger.info(f"    - Perplexity Improvement: {comp['perplexity_improvement']:.2f}%")
-            logger.info(f"    - Perplexity Ratio: {comp['perplexity_ratio']:.4f}")
-
-        if "original_student_vs_teacher" in results["comparison"]:
-            comp = results["comparison"]["original_student_vs_teacher"]
-            logger.info("  Original Student vs Teacher:")
-            logger.info(f"    - Perplexity Gap: {comp['perplexity_gap']:.4f}")
-            logger.info(f"    - Perplexity Ratio: {comp['perplexity_ratio']:.4f}")
-
-        if "distilled_student_vs_teacher" in results["comparison"]:
-            comp = results["comparison"]["distilled_student_vs_teacher"]
-            logger.info("  Distilled Student vs Teacher:")
-            logger.info(f"    - Perplexity Gap: {comp['perplexity_gap']:.4f}")
-            logger.info(f"    - Perplexity Ratio: {comp['perplexity_ratio']:.4f}")
 
     logger.info("=" * 80)
 
