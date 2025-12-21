@@ -87,7 +87,7 @@ python main.py distill --evaluate
 python main.py distill --evaluate --generate-samples --num-samples 5
 
 # Distill in background
-nohup python main.py distill > distill.log 2>&1 &
+nohup python main.py distill --evaluate --generate-samples --num-samples 3 > distill.log 2>&1 &
 # Check logs
 tail -f distill.log
 # Check process
