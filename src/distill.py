@@ -322,11 +322,12 @@ class LogitsTrainer(Trainer):
         original_loss_scalar = original_loss.detach().float().item()
 
         # logging (TensorBoard-safe)
-        self.log({
-            "loss_kd_logits": loss_logits_scalar,
-            "loss_kd_hidden": loss_hidden_scalar,
-            "loss_ce": original_loss_scalar,
-        })
+        if self.state.global_step % 50 == 0:
+            self.log({
+                "loss_kd_logits": loss_logits_scalar,
+                "loss_kd_hidden": loss_hidden_scalar,
+                "loss_ce": original_loss_scalar,
+            })
 
         # periodic console logging
         if self.state.global_step > 0 and self.state.global_step % 200 == 0:
@@ -335,16 +336,6 @@ class LogitsTrainer(Trainer):
                         f"CE: {original_loss_scalar:.4f}")
 
         alpha = self.config_dict["distillation"]["alpha"]
-
-        # check if adaptation layer has gradient
-        if self.state.global_step % 10 == 0:
-            for name, param in self.adaptation_layer.named_parameters():
-                if param.grad is not None:
-                    logger.info(
-                        f"Step {self.state.global_step} - {name} grad norm: {param.grad.norm().item()}"
-                    )
-                else:
-                    logger.info(f"Step {self.state.global_step} - {name} has NO GRAD")
 
         # Weighted sum: alpha * KD + (1-alpha) * CE
         total_loss = alpha * combined_kd_loss + (1 - alpha) * original_loss
