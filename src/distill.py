@@ -248,23 +248,11 @@ class LogitsTrainer(Trainer):
         device = next(model.parameters()).device
         inputs = {k: v.to(device) if hasattr(v, 'to') else v for k, v in inputs.items()}
 
-        student_model = model.module if hasattr(model, 'module') else model
         teacher_model = self.teacher_model.module if hasattr(self.teacher_model,
                                                              'module') else self.teacher_model
 
         # Get student outputs with hidden states for hidden state distillation
-        # FIXME: (CRITICAL / DDP COMPATIBILITY):
-        # Do NOT manually unwrap the student model via `model.module` for forward pass.
-        #
-        # Reason:
-        # - When using DistributedDataParallel (DDP), `model` is a wrapper that injects
-        #   gradient synchronization hooks inside `model.__call__` / `forward`.
-        # - Calling `model.module(...)` bypasses these hooks, which can silently break
-        #   gradient synchronization across workers, leading to:
-        #     * incorrect gradients
-        #     * desynchronized parameters
-        #     * hanging or unstable multi-GPU training
-        student_outputs = student_model(**inputs, output_hidden_states=True)
+        student_outputs = model(**inputs, output_hidden_states=True)
         with torch.no_grad():
             # Get teacher outputs with hidden states
             teacher_outputs = teacher_model(**inputs, output_hidden_states=True)
@@ -347,6 +335,17 @@ class LogitsTrainer(Trainer):
                         f"CE: {original_loss_scalar:.4f}")
 
         alpha = self.config_dict["distillation"]["alpha"]
+
+        # check if adaptation layer has gradient
+        if self.state.global_step % 10 == 0:
+            for name, param in self.adaptation_layer.named_parameters():
+                if param.grad is not None:
+                    logger.info(
+                        f"Step {self.state.global_step} - {name} grad norm: {param.grad.norm().item()}"
+                    )
+                else:
+                    logger.info(f"Step {self.state.global_step} - {name} has NO GRAD")
+
         # Weighted sum: alpha * KD + (1-alpha) * CE
         total_loss = alpha * combined_kd_loss + (1 - alpha) * original_loss
 
