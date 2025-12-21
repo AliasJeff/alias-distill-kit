@@ -69,6 +69,7 @@ htmlcov/
 *.model
 results/
 results_teacher/
+results_output/
 checkpoints/
 outputs/
 logs/
