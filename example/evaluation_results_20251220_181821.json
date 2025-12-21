@@ -1,0 +1,63 @@
+{
+  "timestamp": "2025-12-20T17:40:43.949888",
+  "config": {
+    "teacher_model": "results_teacher",
+    "student_model": "Qwen/Qwen3-0.6B",
+    "distillation_temperature": 2.0,
+    "distillation_alpha": 0.5
+  },
+  "models": {
+    "teacher_origin": {
+      "model_name": "Qwen/Qwen3-1.7B",
+      "total_parameters": 1720574976,
+      "trainable_parameters": 1720574976,
+      "model_size_mb": 3281.736572265625,
+      "perplexity": 5.9079006978627335,
+      "average_loss": 1.77629055644777,
+      "f1_score": 0.2645662353326339,
+      "bleu_score": 20.399653797393448,
+      "rouge1": 32.58783039339655,
+      "rouge2": 9.705733327840102,
+      "rougeL": 14.013045533017483
+    },
+    "teacher": {
+      "model_name": "results_teacher",
+      "total_parameters": 1720574976,
+      "trainable_parameters": 1720574976,
+      "model_size_mb": 3281.736572265625,
+      "perplexity": 3.042341012747836,
+      "average_loss": 1.1126272890492133,
+      "f1_score": 0.2813871418259227,
+      "bleu_score": 37.262993736437046,
+      "rouge1": 33.42558598311228,
+      "rouge2": 8.433609808783215,
+      "rougeL": 20.0534019400121
+    },
+    "original_student": {
+      "model_name": "Qwen/Qwen3-0.6B",
+      "total_parameters": 596049920,
+      "trainable_parameters": 596049920,
+      "model_size_mb": 1136.875244140625,
+      "perplexity": 5.0445332262531615,
+      "average_loss": 1.6183051274742337,
+      "f1_score": 0.30904888268408265,
+      "bleu_score": 17.94572922441654,
+      "rouge1": 36.448838094726405,
+      "rouge2": 9.576066335252515,
+      "rougeL": 15.813415368156155
+    },
+    "distilled_student": {
+      "model_name": "results",
+      "total_parameters": 596049920,
+      "trainable_parameters": 596049920,
+      "model_size_mb": 1136.875244140625,
+      "perplexity": 2.041420058456125,
+      "average_loss": 0.7136456727723006,
+      "f1_score": 0.30890264732314515,
+      "bleu_score": 50.71847754056617,
+      "rouge1": 35.828992311870635,
+      "rouge2": 10.138163403773959,
+      "rougeL": 22.089200168646087
+    }
+  }
+}
