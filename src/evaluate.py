@@ -448,17 +448,6 @@ def evaluate_models(config):  # noqa: C901
         logger.info(f"  - Model Size: {results['models']['teacher']['model_size_mb']:.2f}MB")
         logger.info(f"  - Parameters: {results['models']['teacher']['total_parameters']:,}")
 
-    if "teacher_origin" in results["models"] and "error" not in results["models"]["teacher_origin"]:
-        logger.info("Origin Teacher Model:")
-        logger.info(f"  - Perplexity: {results['models']['teacher_origin']['perplexity']:.4f}")
-        logger.info(f"  - F1 Score: {results['models']['teacher_origin']['f1_score']:.4f}")
-        logger.info(f"  - BLEU Score: {results['models']['teacher_origin']['bleu_score']:.4f}")
-        logger.info(f"  - ROUGE-1: {results['models']['teacher_origin']['rouge1']:.4f}")
-        logger.info(f"  - ROUGE-2: {results['models']['teacher_origin']['rouge2']:.4f}")
-        logger.info(f"  - ROUGE-L: {results['models']['teacher_origin']['rougeL']:.4f}")
-        logger.info(f"  - Model Size: {results['models']['teacher_origin']['model_size_mb']:.2f}MB")
-        logger.info(f"  - Parameters: {results['models']['teacher_origin']['total_parameters']:,}")
-
     if "original_student" in results["models"] and "error" not in results["models"][
             "original_student"]:
         logger.info("Original Student Model:")

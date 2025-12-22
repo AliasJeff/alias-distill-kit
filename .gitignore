@@ -74,7 +74,6 @@ checkpoints/
 outputs/
 logs/
 *.log
-test_results*
 
 # Dataset
 dataset_cache/
@@ -113,3 +112,7 @@ tb_logs/
 # *.tar.gz
 # *.zip
 # *.rar
+
+# Example
+!example/
+!example/*

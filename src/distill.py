@@ -248,12 +248,11 @@ class LogitsTrainer(Trainer):
         device = next(model.parameters()).device
         inputs = {k: v.to(device) if hasattr(v, 'to') else v for k, v in inputs.items()}
 
-        student_model = model.module if hasattr(model, 'module') else model
         teacher_model = self.teacher_model.module if hasattr(self.teacher_model,
                                                              'module') else self.teacher_model
 
         # Get student outputs with hidden states for hidden state distillation
-        student_outputs = student_model(**inputs, output_hidden_states=True)
+        student_outputs = model(**inputs, output_hidden_states=True)
         with torch.no_grad():
             # Get teacher outputs with hidden states
             teacher_outputs = teacher_model(**inputs, output_hidden_states=True)
@@ -280,39 +279,67 @@ class LogitsTrainer(Trainer):
             Combined distillation loss
         """
         device = next(model.parameters()).device
+        T = self.config_dict["distillation"]["temperature"]
 
-        # Compute logits distillation loss
+        # region: 1. Compute logits distillation loss
         student_logits, teacher_logits = pad_logits(student_outputs.logits.to(device),
                                                     teacher_outputs.logits.to(device))
 
-        student_logits_scaled = student_logits / self.config_dict["distillation"]["temperature"]
-        teacher_logits_scaled = teacher_logits / self.config_dict["distillation"]["temperature"]
+        student_logits_scaled = student_logits / T
+        teacher_logits_scaled = teacher_logits / T
 
         labels = inputs["labels"]  # [B, T]
-        mask = (labels != -100).unsqueeze(-1)  # [B, T, 1]
 
+        # KL Divergence
+        # NOTE: log_softmax for student, softmax for teacher
         log_probs_student = F.log_softmax(student_logits_scaled, dim=-1)
         probs_teacher = F.softmax(teacher_logits_scaled, dim=-1)
 
-        kl = F.kl_div(log_probs_student, probs_teacher, reduction="none")
+        kl = F.kl_div(log_probs_student, probs_teacher, reduction="none").sum(dim=-1)  # [B, T]
 
-        kl = kl * mask
-        loss_logits = kl.sum() / mask.sum().clamp_min(1)
+        mask = (labels != -100).float()  # [B, T]
 
-        # Compute hidden state distillation loss if adaptation layer is available
+        loss_logits = (kl * mask).sum() / mask.sum().clamp_min(1)
+        loss_logits = loss_logits * (T * T)
+        # endregion
+
+        # region: 2. Compute hidden state distillation loss
         loss_hidden = 0
         if hasattr(self, 'adaptation_layer') and self.adaptation_layer is not None:
             loss_hidden = self._compute_hidden_state_loss(student_outputs, teacher_outputs)
+        # endregion
 
-        # Combine logits loss with hidden state loss
+        # region: 3. Combine logits loss with hidden state loss
         distillation_weight = self.config_dict["distillation"].get("distillation_weight", 1.0)
         hidden_weight = self.config_dict["distillation"].get("hidden_weight", 0.5)
 
         combined_kd_loss = distillation_weight * loss_logits + hidden_weight * loss_hidden
+        # endregion
 
-        # Combine with original task loss using alpha parameter
-        return self.config_dict["distillation"]["alpha"] * combined_kd_loss + (
-            1 - self.config_dict["distillation"]["alpha"]) * original_loss
+        loss_logits_scalar = loss_logits.detach().float().item()
+        loss_hidden_scalar = (loss_hidden.detach().float().item()
+                              if torch.is_tensor(loss_hidden) else 0.0)
+        original_loss_scalar = original_loss.detach().float().item()
+
+        # logging
+        self.log({
+            "loss_kd_logits": loss_logits_scalar,
+            "loss_kd_hidden": loss_hidden_scalar,
+            "loss_ce": original_loss_scalar,
+        })
+
+        # periodic console logging
+        if self.state.global_step > 0 and self.state.global_step % 200 == 0:
+            logger.info(f"KD logits: {loss_logits_scalar:.4f}, "
+                        f"KD hidden: {loss_hidden_scalar:.4f}, "
+                        f"CE: {original_loss_scalar:.4f}")
+
+        alpha = self.config_dict["distillation"]["alpha"]
+
+        # Weighted sum: alpha * KD + (1-alpha) * CE
+        total_loss = alpha * combined_kd_loss + (1 - alpha) * original_loss
+
+        return total_loss
 
     def _compute_hidden_state_loss(self, student_outputs, teacher_outputs):
         """Compute hidden state distillation loss using adaptation layer.
@@ -339,13 +366,13 @@ class LogitsTrainer(Trainer):
         total_loss = 0
         num_layers = 0
 
-        # Compute KL divergence loss for each student-teacher layer pair
+        # Compute mse loss for each student-teacher layer pair
         for student_idx, teacher_idx in self.adaptation_layer.layer_mapping.items():
             if student_idx >= len(adapted_student_hidden_states):
                 break
 
             student_hidden = adapted_student_hidden_states[student_idx]
-            teacher_hidden = teacher_hidden_states[teacher_idx]
+            teacher_hidden = teacher_hidden_states[teacher_idx].to(device)
 
             # Verify shape compatibility
             if student_hidden.shape != teacher_hidden.shape:
@@ -353,8 +380,9 @@ class LogitsTrainer(Trainer):
                     f"Shape mismatch: student {student_hidden.shape} vs teacher {teacher_hidden.shape}"
                 )
 
-            # Compute MSE loss
-            loss = F.mse_loss(student_hidden, teacher_hidden)
+            # Compute MSE loss (default reduction="mean")
+            loss = F.mse_loss(F.layer_norm(student_hidden, student_hidden.shape[-1:]),
+                              F.layer_norm(teacher_hidden, teacher_hidden.shape[-1:]))
 
             total_loss += loss
             num_layers += 1
@@ -362,9 +390,7 @@ class LogitsTrainer(Trainer):
         # Average loss across all layer pairs and normalize by hidden dimension
         if num_layers > 0:
             avg_loss = total_loss / num_layers
-            hidden_dim = adapted_student_hidden_states[0].size(-1)
-            scaled_loss = avg_loss / hidden_dim
-            return scaled_loss
+            return avg_loss
 
         return torch.tensor(0.0, device=device)
 

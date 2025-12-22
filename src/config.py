@@ -53,7 +53,9 @@ CONFIG = {
     },
     "distillation": {
         "temperature": 2.0,
-        "alpha": 0.5
+        "alpha": 0.5,
+        "distillation_weight": 1.0,
+        "hidden_weight": 0.5
     },
     "model_config": {
         "use_flash_attention": False
