@@ -6,6 +6,7 @@ trl
 hf_transfer
 sacrebleu
 gradio>=4.0.0
+matplotlib
 
 # Development and linting tools
 yapf==0.40.2
