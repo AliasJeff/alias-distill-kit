@@ -1,10 +1,18 @@
 import re
 import ast
+import json
 from pathlib import Path
-import matplotlib.pyplot as plt
+from datetime import datetime
 
-# ===================== 配置 =====================
-LOG_PATH = Path("example/all.log")
+import matplotlib.pyplot as plt
+import numpy as np
+
+# =============================================================================
+#                               CONFIG
+# =============================================================================
+
+BASE_DIR = Path("example")
+LOG_PATH = BASE_DIR / "all.log"
 
 TEACHER_DONE = "Teacher model training completed successfully"
 STUDENT_DONE = "Student model distillation completed successfully"
@@ -12,8 +20,30 @@ STUDENT_DONE = "Student model distillation completed successfully"
 TRAINING_DICT_PATTERN = re.compile(r"\{[^{}]*'loss'[^{}]*\}")
 KD_DICT_PATTERN = re.compile(r"\{[^{}]*'loss_kd_logits'[^{}]*\}")
 
+EVAL_JSON_PREFIX = "evaluation_results_"
 
-# ===================== 解析函数 =====================
+METRICS = [
+    "perplexity",
+    "average_loss",
+    "bleu_score",
+    "f1_score",
+    "rouge1",
+    "rouge2",
+    "rougeL",
+]
+
+MODEL_KEYS = [
+    "teacher_origin",
+    "teacher",
+    "original_student",
+    "distilled_student",
+]
+
+# =============================================================================
+#                        LOG PARSING (TRAIN / KD)
+# =============================================================================
+
+
 def parse_training_metrics(text: str):
     losses, grad_norms, lrs, epochs = [], [], [], []
 
@@ -31,9 +61,7 @@ def parse_training_metrics(text: str):
 
 
 def parse_kd_metrics(text: str):
-    loss_kd_logits = []
-    loss_kd_hidden = []
-    loss_ce = []
+    loss_kd_logits, loss_kd_hidden, loss_ce = [], [], []
 
     for m in KD_DICT_PATTERN.finditer(text):
         try:
@@ -47,7 +75,11 @@ def parse_kd_metrics(text: str):
     return loss_kd_logits, loss_kd_hidden, loss_ce
 
 
-# ===================== 画图函数 =====================
+# =============================================================================
+#                                 PLOTS
+# =============================================================================
+
+
 def plot_training(title, losses, grad_norms, lrs, epochs):
     if not losses:
         print(f"[WARN] No training data for {title}")
@@ -83,27 +115,23 @@ def plot_teacher_student_compare(t_ep, t_loss, t_gn, t_lr, s_ep, s_loss, s_gn, s
 
     plt.figure(figsize=(12, 9))
 
-    # Loss
     plt.subplot(3, 1, 1)
-    plt.plot(t_ep, t_loss, label="Teacher", linewidth=2)
-    plt.plot(s_ep, s_loss, label="Student", linewidth=2)
+    plt.plot(t_ep, t_loss, label="Teacher")
+    plt.plot(s_ep, s_loss, label="Student")
     plt.ylabel("Loss")
-    plt.title("Teacher vs Student (Training Metrics)")
     plt.legend()
     plt.grid(True)
 
-    # Grad norm
     plt.subplot(3, 1, 2)
-    plt.plot(t_ep, t_gn, label="Teacher", linewidth=2)
-    plt.plot(s_ep, s_gn, label="Student", linewidth=2)
+    plt.plot(t_ep, t_gn, label="Teacher")
+    plt.plot(s_ep, s_gn, label="Student")
     plt.ylabel("Grad Norm")
     plt.legend()
     plt.grid(True)
 
-    # LR
     plt.subplot(3, 1, 3)
-    plt.plot(t_ep, t_lr, label="Teacher", linewidth=2)
-    plt.plot(s_ep, s_lr, label="Student", linewidth=2)
+    plt.plot(t_ep, t_lr, label="Teacher")
+    plt.plot(s_ep, s_lr, label="Student")
     plt.ylabel("Learning Rate")
     plt.xlabel("Epoch")
     plt.legend()
@@ -118,15 +146,14 @@ def plot_kd_losses(title, loss_kd_logits, loss_kd_hidden, loss_ce):
         print(f"[WARN] No KD loss data for {title}")
         return
 
-    steps = list(range(1, len(loss_kd_logits) + 1))
+    steps = range(1, len(loss_kd_logits) + 1)
 
     plt.figure(figsize=(10, 6))
+    plt.plot(steps, loss_kd_logits, label="KD Logits")
+    plt.plot(steps, loss_kd_hidden, label="KD Hidden")
+    plt.plot(steps, loss_ce, label="CE")
 
-    plt.plot(steps, loss_kd_logits, label="KD Logits Loss", marker="o")
-    plt.plot(steps, loss_kd_hidden, label="KD Hidden Loss", marker="o")
-    plt.plot(steps, loss_ce, label="CE Loss", marker="o")
-
-    plt.xlabel("Training Step (log order)")
+    plt.xlabel("Training Step")
     plt.ylabel("Loss")
     plt.title(title)
     plt.legend()
@@ -136,30 +163,106 @@ def plot_kd_losses(title, loss_kd_logits, loss_kd_hidden, loss_ce):
     plt.show()
 
 
-# ===================== 主流程 =====================
+# =============================================================================
+#                    EVALUATION JSON (LATEST FILE)
+# =============================================================================
+
+
+def find_latest_eval_json():
+    files = list(BASE_DIR.glob(f"{EVAL_JSON_PREFIX}*.json"))
+    if not files:
+        raise FileNotFoundError("No evaluation_results_*.json found")
+
+    def extract_ts(p: Path):
+        ts = p.stem.replace(EVAL_JSON_PREFIX, "")
+        return datetime.strptime(ts, "%Y%m%d_%H%M%S")
+
+    latest = max(files, key=extract_ts)
+    print(f"[INFO] Using latest evaluation file: {latest.name}")
+    return latest
+
+
+def load_eval_data():
+    path = find_latest_eval_json()
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)["models"]
+
+
+# =============================================================================
+#                       EVALUATION PLOTS
+# =============================================================================
+
+
+def annotate_bars(bars, precision=2):
+    for bar in bars:
+        h = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width() / 2,
+                 h,
+                 f"{h:.{precision}f}",
+                 ha="center",
+                 va="bottom",
+                 fontsize=9)
+
+
+def plot_student_before_after(models):
+    before = models["original_student"]
+    after = models["distilled_student"]
+
+    metrics = METRICS
+    before_vals = [before[m] for m in metrics]
+    after_vals = [after[m] for m in metrics]
+
+    x = np.arange(len(metrics))
+    width = 0.35
+
+    plt.figure(figsize=(12, 6))
+    bars1 = plt.bar(x - width / 2, before_vals, width, label="Original Student")
+    bars2 = plt.bar(x + width / 2, after_vals, width, label="Distilled Student")
+
+    annotate_bars(bars1)
+    annotate_bars(bars2)
+
+    plt.xticks(x, [m.replace("_", "\n") for m in metrics])
+    plt.ylabel("Score")
+    plt.title("Student Before vs After Distillation")
+    plt.legend()
+    plt.grid(axis="y", linestyle="--", alpha=0.6)
+
+    plt.tight_layout()
+    plt.show()
+
+
+# =============================================================================
+#                                   MAIN
+# =============================================================================
+
+
 def main():
+    # ================= TRAIN / KD LOGS =================
     text = LOG_PATH.read_text(encoding="utf-8", errors="ignore")
 
-    teacher_end = text.find(TEACHER_DONE)
-    student_end = text.find(STUDENT_DONE)
+    t_end = text.find(TEACHER_DONE)
+    s_end = text.find(STUDENT_DONE)
 
-    if teacher_end == -1 or student_end == -1:
+    if t_end == -1 or s_end == -1:
         raise RuntimeError("Teacher / Student completion marker not found")
 
-    teacher_text = text[:teacher_end]
-    student_text = text[teacher_end + len(TEACHER_DONE):student_end]
+    teacher_text = text[:t_end]
+    student_text = text[t_end + len(TEACHER_DONE):s_end]
 
-    # -------- Training metrics --------
     t_loss, t_gn, t_lr, t_ep = parse_training_metrics(teacher_text)
     s_loss, s_gn, s_lr, s_ep = parse_training_metrics(student_text)
 
-    plot_training("Teacher Training Metrics", t_loss, t_gn, t_lr, t_ep)
-    plot_training("Student Training Metrics", s_loss, s_gn, s_lr, s_ep)
+    plot_training("Teacher Training", t_loss, t_gn, t_lr, t_ep)
+    plot_training("Student Training", s_loss, s_gn, s_lr, s_ep)
     plot_teacher_student_compare(t_ep, t_loss, t_gn, t_lr, s_ep, s_loss, s_gn, s_lr)
 
-    # -------- KD metrics (Student only) --------
     kd_logits, kd_hidden, kd_ce = parse_kd_metrics(student_text)
-    plot_kd_losses("Student KD Loss Trends", kd_logits, kd_hidden, kd_ce)
+    plot_kd_losses("Student KD Loss", kd_logits, kd_hidden, kd_ce)
+
+    # ================= EVALUATION =================
+    models = load_eval_data()
+    plot_student_before_after(models)
 
 
 if __name__ == "__main__":
