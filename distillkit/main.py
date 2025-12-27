@@ -27,19 +27,26 @@ from distillkit.trainer import DistillationTrainer
 LOG = logging.getLogger(__name__)
 
 
-def setup_file_logging(log_file_path: str):
+def setup_file_logging(output_dir: str, filename: str):
     """
     Attach a file handler to the root logger to save logs to a file.
     """
-    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    log_path = os.path.join(output_dir, filename)
 
-    file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
-    formatter = logging.Formatter(fmt='%(levelname)s:%(name)s:%(message)s')
+    root_logger = LOG
+
+    for h in root_logger.handlers:
+        if isinstance(h, logging.FileHandler) and h.baseFilename == os.path.abspath(log_path):
+            return
+
+    file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(formatter)
 
-    root_logger = logging.getLogger()
     root_logger.addHandler(file_handler)
-    LOG.info(f"Logging to file: {log_file_path}")
+
+    root_logger.info(f"✅ Log file successfully attached to: {log_path}")
 
 
 def load_student_model(  # noqa: C901
@@ -198,6 +205,9 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         os.environ["WANDB_PROJECT"] = config.project_name
 
     accelerator = Accelerator()
+    if accelerator.is_main_process:
+        setup_file_logging(config.output_path, "distill.log")
+
     with accelerator.main_process_first():
         tokenizer = load_tokenizer(config)
         ds_train, ds_eval = load_data(config.dataset, tokenizer)
@@ -285,11 +295,6 @@ def main(config_path: str, verbosity: int):
         config_dict = yaml.safe_load(f)
     config = DistillationRunConfig.model_validate(config_dict)
 
-    # 2. Setup File Logging for Distill
-    # Distillation output path usually contains the model artifacts
-    log_file = os.path.join(config.output_path, "distill.log")
-    setup_file_logging(log_file)
-
     do_distill(config)
 
 
@@ -321,8 +326,7 @@ def train_teacher_main(config_path: str, verbosity: int):
     # 2. Setup File Logging for Teacher Training
     # Check if teacher_train config exists to avoid error, though validation handles it usually
     if config.teacher_train and config.teacher_train.output_path:
-        log_file = os.path.join(config.teacher_train.output_path, "teacher_training.log")
-        setup_file_logging(log_file)
+        setup_file_logging(config.teacher_train.output_path, "teacher_training.log")
 
     accelerator = Accelerator()
     train_teacher(config, accelerator)
@@ -370,10 +374,6 @@ def evaluate_main(config_path: str, verbosity: int):  # noqa: C901
             original_student_path=eval_dict.get("original_student_path"),
             distilled_student_path=eval_dict.get("distilled_student_path"),
         )
-
-    # Setup File Logging for Evaluation
-    log_file = os.path.join(eval_config.output_path, "evaluation.log")
-    setup_file_logging(log_file)
 
     # If config contains distillation config, try to extract model paths from it
     try:

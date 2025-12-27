@@ -18,6 +18,29 @@ from distillkit.data_processing import load_data
 
 LOG = logging.getLogger(__name__)
 
+
+def setup_file_logging(output_dir: str, filename: str):
+    """
+    Attach a file handler to the root logger to save logs to a file.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    log_path = os.path.join(output_dir, filename)
+
+    root_logger = LOG
+
+    for h in root_logger.handlers:
+        if isinstance(h, logging.FileHandler) and h.baseFilename == os.path.abspath(log_path):
+            return
+
+    file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+
+    root_logger.addHandler(file_handler)
+
+    root_logger.info(f"✅ Log file successfully attached to: {log_path}")
+
+
 # Initialize NLTK data (if needed)
 try:
     import nltk
@@ -54,6 +77,7 @@ def calculate_ppl(
                     texts,
                     return_tensors="pt",
                     padding=True,
+                    padding_side="left",
                     truncation=True,
                     max_length=max_new_tokens,
                 )
@@ -273,6 +297,7 @@ def generate_texts(  # noqa: C901
             prompts,
             return_tensors="pt",
             padding=True,
+            padding_side="left",
             truncation=True,
             max_length=max_length,
         ).to(device)
@@ -397,6 +422,8 @@ def evaluate_all_models(
 ) -> Dict[str, Any]:
     """Evaluate all models defined in the configuration."""
     os.makedirs(config.output_path, exist_ok=True)
+
+    setup_file_logging(config.output_path, "evaluation.log")
 
     # Load tokenizer
     # Use the first available model path to load the tokenizer
