@@ -1,8 +1,8 @@
 project_name: qwen-afm-distill
 trust_remote_code: true
-model: Qwen/Qwen3-1.7B
+model: Qwen/Qwen3-0.6B
 output_path: outputs/models/qwen-afm-distill
-use_flash_attention: true
+use_flash_attention: false
 sequence_length: 8192
 dataset:
   train_dataset:
@@ -26,9 +26,9 @@ loss_functions:
 layer_mapping: all
 teacher:
   kind: hf
-  path: Qwen/Qwen3-4B
+  path: Qwen/Qwen3-1.7B
   kwargs:
-    attn_implementation: flash_attention_2
+    # attn_implementation: flash_attention_2
     torch_dtype: bfloat16
 training_args:
   dataset_text_field: text
@@ -49,6 +49,6 @@ training_args:
   gradient_checkpointing: true
   gradient_checkpointing_kwargs:
     use_reentrant: false
-  report_to: wandb
+  # report_to: wandb
   push_to_hub: false
   dataset_num_proc: 16
