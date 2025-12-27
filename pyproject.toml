@@ -21,11 +21,16 @@ dependencies = [
     "torch>=2.0.0",
     "wandb",
     "tqdm",
+    "sacrebleu>=2.3.0",
+    "rouge-score>=0.1.2",
+    "nltk>=3.8.0",
 ]
 
 
 [project.scripts]
-distillkit = "distillkit.main:main"
+train-teacher = "distillkit.main:train_teacher_main"
+distill = "distillkit.main:main"
+evaluate = "distillkit.main:evaluate_main"
 
 [project.optional-dependencies]
 dev = ["pytest~=9.0.2", "ruff~=0.14.9"]

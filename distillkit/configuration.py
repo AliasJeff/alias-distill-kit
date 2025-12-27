@@ -140,6 +140,20 @@ class TeacherDatasetConfig(BaseModel):
     )
 
 
+class TrainTeacherConfig(BaseModel):
+    output_path: str = Field(description="Path to save the fine-tuned teacher model.", )
+    training_args: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Training arguments (SFTConfig kwargs) for teacher pre-training/fine-tuning.",
+    )
+    dataset: DatasetConfiguration | None = Field(
+        default=None,
+        description=
+        "Optional separate dataset configuration to use when training the teacher. If omitted, "
+        "the main distillation dataset configuration is used.",
+    )
+
+
 class DistillationRunConfig(BaseModel):
     project_name: str = Field(
         default="distillkit",
@@ -216,4 +230,52 @@ class DistillationRunConfig(BaseModel):
         default=None,
         description=
         "List of regular expressions matching names of parameters to freeze during training.",
+    )
+    teacher_train: TrainTeacherConfig | None = Field(
+        default=None,
+        description=
+        "Optional configuration block for training a teacher model separately. Used by the "
+        "teacher-training CLI and ignored by the distillation-only CLI.",
+    )
+
+
+class EvaluationConfig(BaseModel):
+    original_teacher_path: str | None = Field(
+        default=None,
+        description=
+        "Path to the original teacher model. If None, will use teacher.path from config.",
+    )
+    trained_teacher_path: str | None = Field(
+        default=None,
+        description=
+        "Path to the trained teacher model. If None, will use teacher_train.output_path from config.",
+    )
+    original_student_path: str | None = Field(
+        default=None,
+        description="Path to the original student model. If None, will use model from config.",
+    )
+    distilled_student_path: str | None = Field(
+        default=None,
+        description=
+        "Path to the distilled student model. If None, will use output_path from config.",
+    )
+    output_path: str = Field(
+        default="outputs/evaluation_results",
+        description="Path to save evaluation results.",
+    )
+    max_new_tokens: int | None = Field(
+        default=None,
+        description="Maximum generation length for text generation metrics.",
+    )
+    batch_size: int = Field(
+        default=8,
+        description="Batch size for evaluation.",
+    )
+    num_samples: int | None = Field(
+        default=None,
+        description="Number of samples to evaluate. If None, evaluates all samples.",
+    )
+    device: str = Field(
+        default="cuda",
+        description="Device to use for evaluation.",
     )

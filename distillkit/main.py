@@ -13,10 +13,12 @@ from accelerate import Accelerator
 from distillkit.compression import LogprobCompressor
 from distillkit.configuration import (
     DistillationRunConfig,
+    EvaluationConfig,
     TeacherDatasetConfig,
     TeacherModelConfig,
 )
 from distillkit.data_processing import load_data
+from distillkit.evaluation import evaluate_all_models
 from distillkit.hsd_mapping import HiddenStateMapping
 from distillkit.monkey_patch_packing import monkey_patch_packing_for_model
 from distillkit.signals import OfflineSignalSource, OnlineSignalSource, SignalSource
@@ -78,6 +80,60 @@ def load_student_model(  # noqa: C901
         if num_frozen:
             print(f"Froze {num_frozen} tensors by regular expression")
     return model
+
+
+def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> None:
+    if not isinstance(config.teacher, TeacherModelConfig):
+        raise ValueError("Teacher must be a HF model (TeacherModelConfig) for training.")
+    if config.teacher_train is None:
+        raise ValueError("teacher_train configuration must be set to train the teacher model.")
+
+    teacher_cfg = config.teacher_train
+
+    os.makedirs(teacher_cfg.output_path, exist_ok=True)
+
+    teacher_dataset_config = teacher_cfg.dataset or config.dataset
+
+    with accelerator.main_process_first():
+        teacher_tokenizer = load_tokenizer(config)
+        ds_train, ds_eval = load_data(teacher_dataset_config, teacher_tokenizer)
+
+    teacher_model = transformers.AutoModelForCausalLM.from_pretrained(
+        config.teacher.path,
+        trust_remote_code=config.trust_remote_code,
+        **(config.teacher.kwargs or {}),
+    )
+
+    teacher_training_args = dict(teacher_cfg.training_args)
+    dataset_kwargs = teacher_training_args.pop("dataset_kwargs", {})
+    if teacher_dataset_config.prepacked:
+        dataset_kwargs["skip_prepare_dataset"] = True
+    max_length = teacher_training_args.pop("max_length", config.sequence_length)
+    training_arguments = trl.SFTConfig(
+        **teacher_training_args,
+        max_length=max_length,
+        output_dir=teacher_cfg.output_path,
+        dataset_kwargs=dataset_kwargs,
+    )
+
+    teacher_trainer = trl.SFTTrainer(
+        model=teacher_model,
+        args=training_arguments,
+        train_dataset=ds_train,
+        eval_dataset=ds_eval,
+        data_collator=collate_packed_batch if teacher_dataset_config.prepacked else None,
+        processing_class=None if teacher_dataset_config.prepacked else teacher_tokenizer,
+    )
+
+    resume_from_checkpoint = teacher_cfg.training_args.get("resume_from_checkpoint", None)
+
+    LOG.info("Starting teacher training.")
+    teacher_trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    LOG.info(f"Finished teacher training. Saving teacher model to {teacher_cfg.output_path}.")
+    teacher_trainer.save_model(teacher_cfg.output_path)
+    LOG.info("Done training teacher.")
+
+    config.teacher.path = teacher_cfg.output_path
 
 
 def create_signal_source(config: DistillationRunConfig, vocab_size: int) -> SignalSource:
@@ -212,6 +268,129 @@ def main(config_path: str, verbosity: int):
         config_dict = yaml.safe_load(f)
     config = DistillationRunConfig.model_validate(config_dict)
     do_distill(config)
+
+
+@click.command("distillkit-train-teacher")
+@click.argument(
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False, readable=True),
+)
+@click.option(
+    "--verbose",
+    "-v",
+    "verbosity",
+    count=True,
+    help="Increase verbosity of logging. Use -vv for debug level.",
+)
+def train_teacher_main(config_path: str, verbosity: int):
+    log_level = logging.WARNING
+    if verbosity >= 2:
+        log_level = logging.DEBUG
+    elif verbosity == 1:
+        log_level = logging.INFO
+    logging.basicConfig(level=log_level)
+    with open(config_path, "r") as f:
+        config_dict = yaml.safe_load(f)
+    config = DistillationRunConfig.model_validate(config_dict)
+    accelerator = Accelerator()
+    train_teacher(config, accelerator)
+
+
+@click.command("distillkit-evaluate")
+@click.argument(
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False, readable=True),
+)
+@click.option(
+    "--verbose",
+    "-v",
+    "verbosity",
+    count=True,
+    help="Increase verbosity of logging. Use -vv for debug level.",
+)
+def evaluate_main(config_path: str, verbosity: int):  # noqa: C901
+    log_level = logging.WARNING
+    if verbosity >= 2:
+        log_level = logging.DEBUG
+    elif verbosity == 1:
+        log_level = logging.INFO
+    logging.basicConfig(level=log_level)
+
+    with open(config_path, "r") as f:
+        config_dict = yaml.safe_load(f)
+
+    # Try to read evaluation config from evaluation section, otherwise read from top level
+    eval_dict = config_dict.get("evaluation", config_dict)
+
+    # Try to parse as evaluation config
+    try:
+        eval_config = EvaluationConfig.model_validate(eval_dict)
+    except Exception:
+        # If parsing fails, create a minimal config
+        eval_config = EvaluationConfig(
+            output_path=eval_dict.get("output_path", "outputs/evaluation_results"),
+            max_new_tokens=eval_dict.get("max_new_tokens"),
+            batch_size=eval_dict.get("batch_size", 8),
+            num_samples=eval_dict.get("num_samples"),
+            device=eval_dict.get("device", "cuda"),
+            original_teacher_path=eval_dict.get("original_teacher_path"),
+            trained_teacher_path=eval_dict.get("trained_teacher_path"),
+            original_student_path=eval_dict.get("original_student_path"),
+            distilled_student_path=eval_dict.get("distilled_student_path"),
+        )
+
+    # If config contains distillation config, try to extract model paths from it
+    try:
+        distill_config = DistillationRunConfig.model_validate(config_dict)
+        # If paths in evaluation config are empty, try to get them from distillation config
+        if eval_config.original_teacher_path is None and isinstance(distill_config.teacher,
+                                                                    TeacherModelConfig):
+            eval_config.original_teacher_path = distill_config.teacher.path
+
+        if eval_config.trained_teacher_path is None and distill_config.teacher_train:
+            eval_config.trained_teacher_path = distill_config.teacher_train.output_path
+
+        if eval_config.original_student_path is None:
+            eval_config.original_student_path = distill_config.train_model
+
+        if eval_config.distilled_student_path is None:
+            eval_config.distilled_student_path = distill_config.output_path
+
+        # Use dataset configuration from distillation config
+        dataset_config = distill_config.dataset
+    except Exception:
+        # If parsing fails, try to get dataset config from evaluation config
+        if "dataset" in config_dict:
+            from distillkit.configuration import DatasetConfiguration
+            dataset_config = DatasetConfiguration.model_validate(config_dict["dataset"])
+        elif "dataset" in eval_dict:
+            from distillkit.configuration import DatasetConfiguration
+            dataset_config = DatasetConfiguration.model_validate(eval_dict["dataset"])
+        else:
+            raise ValueError("Dataset configuration is required in evaluation config")
+
+    LOG.info("Starting evaluation")
+    results = evaluate_all_models(eval_config, dataset_config)
+
+    # Print summary
+    LOG.info("\n" + "=" * 80)
+    LOG.info("Evaluation Summary")
+    LOG.info("=" * 80)
+    for model_name, model_results in results.items():
+        LOG.info(f"\n{model_name}:")
+        if "ppl" in model_results and model_results["ppl"] is not None:
+            LOG.info(f"  PPL: {model_results['ppl']:.4f}")
+        if "bleu" in model_results and model_results["bleu"] is not None:
+            LOG.info(f"  BLEU: {model_results['bleu']:.4f}")
+        if "f1" in model_results and model_results["f1"] is not None:
+            LOG.info(f"  F1: {model_results['f1']:.4f}")
+        if "rouge" in model_results and model_results["rouge"] is not None:
+            rouge = model_results["rouge"]
+            LOG.info(f"  ROUGE-1: {rouge.get('rouge1', 0):.4f}")
+            LOG.info(f"  ROUGE-2: {rouge.get('rouge2', 0):.4f}")
+            LOG.info(f"  ROUGE-L: {rouge.get('rougeL', 0):.4f}")
+    LOG.info("\n" + "=" * 80)
+    LOG.info(f"Results saved to {eval_config.output_path}/evaluation_results.json")
 
 
 if __name__ == "__main__":

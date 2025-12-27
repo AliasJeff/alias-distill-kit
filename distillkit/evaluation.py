@@ -1,0 +1,460 @@
+# Copyright 2025 Arcee AI
+import json
+import logging
+import os
+from typing import Any, List, Dict
+
+import numpy as np
+import torch
+import transformers
+from datasets import Dataset
+from nltk.tokenize import word_tokenize
+from rouge_score import rouge_scorer
+from sacrebleu import BLEU
+from tqdm import tqdm
+
+from distillkit.configuration import DatasetConfiguration, EvaluationConfig
+from distillkit.data_processing import load_data
+
+LOG = logging.getLogger(__name__)
+
+# Initialize NLTK data (if needed)
+try:
+    import nltk
+    nltk.download("punkt", quiet=True)
+except Exception:
+    pass
+
+
+def calculate_ppl(
+    model: transformers.PreTrainedModel,
+    tokenizer: transformers.PreTrainedTokenizer,
+    dataset: Dataset,
+    batch_size: int = 8,
+    device: str = "cuda",
+    max_new_tokens: int = 32768,
+) -> float:
+    """Calculate the Perplexity (PPL) of the model."""
+    model.eval()
+    model = model.to(device)
+
+    total_loss = 0.0
+    total_tokens = 0
+
+    with torch.no_grad():
+        for i in tqdm(range(0, len(dataset), batch_size), desc="Calculating PPL"):
+            batch = dataset[i:i + batch_size]
+
+            # Process input
+            if "input_ids" in batch:
+                input_ids = torch.tensor(batch["input_ids"]).to(device)
+            elif "text" in batch:
+                texts = batch["text"] if isinstance(batch["text"], list) else [batch["text"]]
+                encoded = tokenizer(
+                    texts,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=max_new_tokens,
+                )
+                input_ids = encoded["input_ids"].to(device)
+            else:
+                continue
+
+            attention_mask = (input_ids != tokenizer.pad_token_id).long()
+            # Ensure pad_token_id is set
+            if tokenizer.pad_token_id is None:
+                tokenizer.pad_token_id = tokenizer.eos_token_id
+
+            labels = input_ids.clone()
+            # Mask padding tokens in labels so they don't contribute to loss
+            labels[labels == tokenizer.pad_token_id] = -100
+
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+            )
+
+            loss = outputs.loss
+            # Calculate the number of valid tokens (excluding padding)
+            num_tokens = attention_mask.sum().item()
+
+            total_loss += loss.item() * num_tokens
+            total_tokens += num_tokens
+
+    if total_tokens == 0:
+        return float("inf")
+
+    avg_loss = total_loss / total_tokens
+    ppl = np.exp(avg_loss)
+    return float(ppl)
+
+
+def calculate_bleu(
+    predictions: List[str],
+    references: List[str],
+) -> float:
+    """Calculate BLEU score."""
+    if len(predictions) == 0 or len(references) == 0:
+        return 0.0
+
+    bleu = BLEU()
+    # Transpose references for sacrebleu if necessary (it expects list of references, where each item is a list of all refs for that sample)
+    # However, corpus_score expects: corpus_score(sys, [ref1, ref2, ...]) where ref1 is a list of lines.
+    # The simple input here implies 1 reference per prediction.
+    score = bleu.corpus_score(predictions, [references])
+    return score.score / 100.0  # Convert to 0-1 range
+
+
+def calculate_rouge(
+    predictions: List[str],
+    references: List[str],
+) -> Dict[str, float]:
+    """Calculate ROUGE scores."""
+    scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
+
+    rouge1_scores = []
+    rouge2_scores = []
+    rougeL_scores = []
+
+    for pred, ref in zip(predictions, references):
+        scores = scorer.score(ref, pred)
+        rouge1_scores.append(scores["rouge1"].fmeasure)
+        rouge2_scores.append(scores["rouge2"].fmeasure)
+        rougeL_scores.append(scores["rougeL"].fmeasure)
+
+    return {
+        "rouge1": float(np.mean(rouge1_scores)),
+        "rouge2": float(np.mean(rouge2_scores)),
+        "rougeL": float(np.mean(rougeL_scores)),
+    }
+
+
+def calculate_f1(
+    predictions: List[str],
+    references: List[str],
+) -> float:
+    """Calculate F1 score (based on token-level exact match)."""
+    if len(predictions) == 0 or len(references) == 0:
+        return 0.0
+
+    total_f1 = 0.0
+    valid_count = 0
+
+    for pred, ref in zip(predictions, references):
+        if not pred.strip() or not ref.strip():
+            continue
+
+        try:
+            pred_tokens = set(word_tokenize(pred.lower()))
+            ref_tokens = set(word_tokenize(ref.lower()))
+        except Exception:
+            # Fallback to simple split if tokenize fails
+            pred_tokens = set(pred.lower().split())
+            ref_tokens = set(ref.lower().split())
+
+        if len(pred_tokens) == 0 or len(ref_tokens) == 0:
+            continue
+
+        intersection = pred_tokens & ref_tokens
+
+        precision = len(intersection) / len(pred_tokens) if pred_tokens else 0.0
+        recall = len(intersection) / len(ref_tokens) if ref_tokens else 0.0
+
+        if precision + recall == 0:
+            f1 = 0.0
+        else:
+            f1 = 2 * (precision * recall) / (precision + recall)
+
+        total_f1 += f1
+        valid_count += 1
+
+    if valid_count == 0:
+        return 0.0
+
+    return float(total_f1 / valid_count)
+
+
+def generate_texts(  # noqa: C901
+    model: transformers.PreTrainedModel,
+    tokenizer: transformers.PreTrainedTokenizer,
+    dataset: Dataset,
+    batch_size: int = 8,
+    max_length: int = 32768,
+    device: str = "cuda",
+) -> tuple[List[str], List[str]]:
+    """
+    Generate texts and return predictions and references.
+    Optimized to use apply_chat_template if structured data is available.
+    """
+    model.eval()
+    model = model.to(device)
+
+    predictions = []
+    references = []
+
+    # Configure padding
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
+    for i in tqdm(range(0, len(dataset), batch_size), desc="Generating texts"):
+        batch = dataset[i:i + batch_size]
+
+        prompts = []
+        batch_references = []
+
+        # Case 1: Structured "messages" or "conversations" (Ideal for Chat Models)
+        if "messages" in batch or "conversations" in batch:
+            raw_data = batch.get("messages", batch.get("conversations"))
+
+            for conversation in raw_data:
+                # Handle generic list of dicts structure
+                if isinstance(conversation, list):
+                    # We assume the last message is the target (assistant response)
+                    # and the preceding messages are the context (user prompt/history)
+                    if len(conversation) > 0:
+                        context_msgs = conversation[:-1]
+                        target_msg = conversation[-1]
+
+                        # Apply chat template for the prompt part
+                        prompt_str = tokenizer.apply_chat_template(context_msgs,
+                                                                   tokenize=False,
+                                                                   add_generation_prompt=True)
+                        prompts.append(prompt_str)
+
+                        # Extract content from the last message as reference
+                        ref_content = target_msg.get("content", target_msg.get("value", ""))
+                        batch_references.append(ref_content)
+                    else:
+                        prompts.append("")
+                        batch_references.append("")
+                else:
+                    prompts.append("")
+                    batch_references.append("")
+
+        # Case 2: Pre-formatted "text" column (Fallback / Completion style)
+        elif "text" in batch:
+            texts = batch["text"] if isinstance(batch["text"], list) else [batch["text"]]
+
+            # Here we must split the text blindly as we don't have the structure.
+            # We use an 80/20 split as a heuristic for completion evaluation.
+            for text in texts:
+                encoded = tokenizer(text,
+                                    return_tensors="pt",
+                                    truncation=True,
+                                    max_length=max_length)
+                ids = encoded["input_ids"][0]
+
+                if len(ids) > 10:
+                    split_point = int(len(ids) * 0.8)
+                    prompt_ids = ids[:split_point]
+                    ref_ids = ids[split_point:]
+
+                    prompt_text = tokenizer.decode(prompt_ids, skip_special_tokens=True)
+                    ref_text = tokenizer.decode(ref_ids, skip_special_tokens=True)
+                else:
+                    # Too short, just skip or use empty
+                    prompt_text = text
+                    ref_text = ""
+
+                prompts.append(prompt_text)
+                batch_references.append(ref_text)
+
+        else:
+            continue
+
+        # Skip empty batches
+        if not prompts:
+            continue
+
+        # Tokenize prompts
+        inputs = tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=max_length,
+        ).to(device)
+
+        # Generate
+        with torch.no_grad():
+            outputs = model.generate(
+                input_ids=inputs.input_ids,
+                attention_mask=inputs.attention_mask,
+                max_new_tokens=max_length,
+                num_beams=1,
+                do_sample=False,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+
+        # Decode generated text
+        # We slice outputs to exclude the input prompt tokens
+        input_len = inputs.input_ids.shape[1]
+        generated_tokens = outputs[:, input_len:]
+
+        batch_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+
+        predictions.extend(batch_preds)
+        references.extend(batch_references)
+
+    return predictions, references
+
+
+def evaluate_model(
+    model_path: str,
+    tokenizer: transformers.PreTrainedTokenizer,
+    dataset: Dataset,
+    eval_config: EvaluationConfig,
+    model_name: str = "model",
+) -> Dict[str, Any]:
+    """Evaluate a single model."""
+    LOG.info(f"Evaluating {model_name} at {model_path}")
+
+    results = {"model_name": model_name, "model_path": model_path}
+
+    # Load Model
+    try:
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_path,
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16 if eval_config.device == "cuda" else torch.float32,
+            device_map=eval_config.device,  # Auto map to device
+        )
+    except Exception as e:
+        LOG.error(f"Failed to load model {model_path}: {e}")
+        return results
+
+    # Calculate PPL
+    try:
+        ppl = calculate_ppl(
+            model,
+            tokenizer,
+            dataset,
+            batch_size=eval_config.batch_size,
+            device=eval_config.device,
+            max_new_tokens=eval_config.max_new_tokens,
+        )
+        results["ppl"] = ppl
+        LOG.info(f"{model_name} PPL: {ppl:.4f}")
+    except Exception as e:
+        LOG.error(f"Failed to calculate PPL for {model_name}: {e}")
+        results["ppl"] = None
+
+    # Calculate Generation Metrics (BLEU, F1, ROUGE)
+    try:
+        predictions, references = generate_texts(
+            model,
+            tokenizer,
+            dataset,
+            batch_size=eval_config.batch_size,
+            max_length=eval_config.max_new_tokens,
+            device=eval_config.device,
+        )
+
+        if len(predictions) > 0 and len(references) > 0:
+            # Filter empty strings
+            valid_pairs = [(p, r) for p, r in zip(predictions, references)
+                           if p.strip() and r.strip()]
+
+            if valid_pairs:
+                valid_preds, valid_refs = zip(*valid_pairs)
+                valid_preds = list(valid_preds)
+                valid_refs = list(valid_refs)
+
+                bleu = calculate_bleu(valid_preds, valid_refs)
+                results["bleu"] = bleu
+                LOG.info(f"{model_name} BLEU: {bleu:.4f}")
+
+                f1 = calculate_f1(valid_preds, valid_refs)
+                results["f1"] = f1
+                LOG.info(f"{model_name} F1: {f1:.4f}")
+
+                rouge = calculate_rouge(valid_preds, valid_refs)
+                results["rouge"] = rouge
+                LOG.info(f"{model_name} ROUGE: {rouge}")
+            else:
+                results.update({"bleu": None, "f1": None, "rouge": None})
+        else:
+            results.update({"bleu": None, "f1": None, "rouge": None})
+
+    except Exception as e:
+        LOG.error(f"Failed to calculate generation metrics for {model_name}: {e}")
+        results.update({"bleu": None, "f1": None, "rouge": None})
+
+    # Clean up memory
+    del model
+    if eval_config.device == "cuda":
+        torch.cuda.empty_cache()
+
+    return results
+
+
+def evaluate_all_models(
+    config: EvaluationConfig,
+    dataset_config: DatasetConfiguration,
+) -> Dict[str, Any]:
+    """Evaluate all models defined in the configuration."""
+    os.makedirs(config.output_path, exist_ok=True)
+
+    # Load tokenizer
+    # Use the first available model path to load the tokenizer
+    tokenizer_path = (config.original_teacher_path or config.trained_teacher_path
+                      or config.original_student_path or config.distilled_student_path)
+
+    if tokenizer_path is None:
+        raise ValueError("At least one model path must be provided")
+
+    LOG.info(f"Loading tokenizer from {tokenizer_path}")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        tokenizer_path,
+        trust_remote_code=True,
+    )
+
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
+    # Ensure chat template exists if we plan to use it, otherwise set a default
+    # if tokenizer.chat_template is None:
+    #     # Fallback to a simple ChatML-like template if none exists
+    #     tokenizer.chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
+
+    # Load dataset
+    LOG.info("Loading dataset")
+    # Note: load_data (from reference code) typically flattens data to 'text'.
+    # If you want to use the 'messages' logic in generate_texts, ensure DatasetConfiguration
+    # is set to NOT format everything into a single string immediately, or modify load_data.
+    dataset, _ = load_data(dataset_config, tokenizer)
+
+    if config.num_samples:
+        dataset = dataset.select(range(min(config.num_samples, len(dataset))))
+
+    all_results = {}
+
+    model_configs = [
+        ("original_teacher", config.original_teacher_path),
+        ("trained_teacher", config.trained_teacher_path),
+        ("original_student", config.original_student_path),
+        ("distilled_student", config.distilled_student_path),
+    ]
+
+    for name, path in model_configs:
+        if path:
+            results = evaluate_model(
+                path,
+                tokenizer,
+                dataset,
+                config,
+                name,
+            )
+            all_results[name] = results
+
+    # Save results
+    output_file = os.path.join(config.output_path, "evaluation_results.json")
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(all_results, f, indent=2, ensure_ascii=False)
+
+    LOG.info(f"Evaluation results saved to {output_file}")
+
+    return all_results
