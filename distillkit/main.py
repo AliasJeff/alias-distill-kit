@@ -448,12 +448,6 @@ def evaluate_main(config_path: str, verbosity: int):  # noqa: C901
     help="Maximum number of new tokens to generate.",
 )
 @click.option(
-    "--device",
-    type=str,
-    default="cuda",
-    help="Device to use for generation (cuda or cpu).",
-)
-@click.option(
     "--verbose",
     "-v",
     "verbosity",
@@ -546,19 +540,22 @@ def infer_main(  # noqa: C901
         model_path,
         trust_remote_code=True,
         torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
-        device_map=device,
     )
+
+    model.eval()
+    model = model.to(device)
 
     # Generate texts
     LOG.info("Starting text generation")
-    predictions, references, prompts = generate_texts(
-        model=model,
-        tokenizer=tokenizer,
-        dataset=dataset,
-        batch_size=batch_size,
-        max_length=max_new_tokens,
-        device=device,
-    )
+    with torch.no_grad():
+        predictions, references, prompts = generate_texts(
+            model=model,
+            tokenizer=tokenizer,
+            dataset=dataset,
+            batch_size=batch_size,
+            max_length=max_new_tokens,
+            device=device,
+        )
 
     # Save results
     results = []
