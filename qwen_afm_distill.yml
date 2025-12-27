@@ -2,7 +2,7 @@ project_name: qwen-afm-distill
 trust_remote_code: true
 model: Qwen/Qwen3-1.7B
 output_path: outputs/models/qwen-afm-distill
-use_flash_attention: false
+use_flash_attention: true
 sequence_length: 8192
 dataset:
   train_dataset:
@@ -28,7 +28,7 @@ teacher:
   kind: hf
   path: Qwen/Qwen3-4B
   kwargs:
-    # attn_implementation: flash_attention_2
+    attn_implementation: flash_attention_2
     torch_dtype: bfloat16
 training_args:
   dataset_text_field: text
@@ -51,4 +51,4 @@ training_args:
     use_reentrant: false
   report_to: wandb
   push_to_hub: false
-  dataset_num_proc: 1
+  dataset_num_proc: 16
