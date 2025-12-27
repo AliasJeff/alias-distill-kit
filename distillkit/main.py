@@ -21,33 +21,12 @@ from distillkit.configuration import (
 from distillkit.data_processing import load_data
 from distillkit.evaluation import evaluate_all_models, generate_texts
 from distillkit.hsd_mapping import HiddenStateMapping
+from distillkit.logging import FileLoggerCallback, setup_file_logging
 from distillkit.monkey_patch_packing import monkey_patch_packing_for_model
 from distillkit.signals import OfflineSignalSource, OnlineSignalSource, SignalSource
 from distillkit.trainer import DistillationTrainer
 
 LOG = logging.getLogger(__name__)
-
-
-def setup_file_logging(output_dir: str, filename: str):
-    """
-    Attach a file handler to the root logger to save logs to a file.
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    log_path = os.path.join(output_dir, filename)
-
-    root_logger = LOG
-
-    for h in root_logger.handlers:
-        if isinstance(h, logging.FileHandler) and h.baseFilename == os.path.abspath(log_path):
-            return
-
-    file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(formatter)
-
-    root_logger.addHandler(file_handler)
-
-    root_logger.info(f"✅ Log file successfully attached to: {log_path}")
 
 
 def load_student_model(  # noqa: C901
@@ -147,6 +126,8 @@ def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> No
         data_collator=collate_packed_batch if teacher_dataset_config.prepacked else None,
         processing_class=None if teacher_dataset_config.prepacked else teacher_tokenizer,
     )
+    teacher_trainer.add_callback(
+        FileLoggerCallback(os.path.join(teacher_cfg.output_path, "teacher_training.jsonl")))
 
     resume_from_checkpoint = teacher_cfg.training_args.get("resume_from_checkpoint", None)
 
@@ -207,7 +188,7 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
 
     accelerator = Accelerator()
     if accelerator.is_main_process:
-        setup_file_logging(config.output_path, "distill.log")
+        setup_file_logging(LOG, config.output_path, "distill.log")
 
     with accelerator.main_process_first():
         tokenizer = load_tokenizer(config)
@@ -261,6 +242,7 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         data_collator=collate_packed_batch if config.dataset.prepacked else None,
         processing_class=None if config.dataset.prepacked else tokenizer,
     )
+    trainer.add_callback(FileLoggerCallback(os.path.join(config.output_path, "distill.jsonl")))
 
     resume_from_checkpoint = config.training_args.get("resume_from_checkpoint", None)
 
@@ -327,7 +309,7 @@ def train_teacher_main(config_path: str, verbosity: int):
     # 2. Setup File Logging for Teacher Training
     # Check if teacher_train config exists to avoid error, though validation handles it usually
     if config.teacher_train and config.teacher_train.output_path:
-        setup_file_logging(config.teacher_train.output_path, "teacher_training.log")
+        setup_file_logging(LOG, config.teacher_train.output_path, "teacher_training.log")
 
     accelerator = Accelerator()
     train_teacher(config, accelerator)
@@ -528,7 +510,7 @@ def infer_main(  # noqa: C901
         output_path = "outputs/test_results"
 
     os.makedirs(output_path, exist_ok=True)
-    setup_file_logging(output_path, "infer.log")
+    setup_file_logging(LOG, output_path, "infer.log")
 
     LOG.info(f"Testing model: {model_path}")
     LOG.info(f"Output path: {output_path}")
@@ -569,7 +551,7 @@ def infer_main(  # noqa: C901
 
     # Generate texts
     LOG.info("Starting text generation")
-    predictions, references = generate_texts(
+    predictions, references, prompts = generate_texts(
         model=model,
         tokenizer=tokenizer,
         dataset=dataset,
@@ -580,9 +562,10 @@ def infer_main(  # noqa: C901
 
     # Save results
     results = []
-    for i, (pred, ref) in enumerate(zip(predictions, references)):
+    for i, (pred, ref, prompt) in enumerate(zip(predictions, references, prompts)):
         results.append({
             "sample_id": i,
+            "prompt": prompt,
             "generated": pred,
             "reference": ref,
         })
@@ -598,6 +581,8 @@ def infer_main(  # noqa: C901
             f.write(f"{'='*80}\n")
             f.write(f"Sample {i+1}\n")
             f.write(f"{'='*80}\n")
+            if result.get("prompt"):
+                f.write(f"Prompt:\n{result['prompt']}\n\n")
             f.write(f"Generated:\n{result['generated']}\n\n")
             if result.get("reference"):
                 f.write(f"Reference:\n{result['reference']}\n\n")

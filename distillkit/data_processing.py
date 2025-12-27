@@ -46,9 +46,6 @@ def gpt_format(example, tokenizer):
 
 
 def leet10k_format(example, tokenizer):
-    # [修改 2] 必须包含 Assistant 的回答，否则模型学不到东西
-    # 你的原代码只构建了 prompt，没有 target。
-    # 假设数据集里答案的字段叫 'output' (常见命名)，如果是 'response' 或 'code' 请自行修改
     output_content = example.get('output')
 
     messages = [
@@ -62,8 +59,6 @@ def leet10k_format(example, tokenizer):
         },
     ]
 
-    # [修改 3] 训练时 add_generation_prompt 设为 False
-    # 因为我们提供了完整的对话历史（含回答），而不是在构建推理用的 Prompt
     text = tokenizer.apply_chat_template(
         messages,
         tokenize=False,

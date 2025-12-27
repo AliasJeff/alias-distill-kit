@@ -13,7 +13,7 @@ dataset:
     split: train
   seed: 42
   format_function: leet10k_format
-  num_samples: 6000
+  num_samples: 3000
   num_eval_samples: 400
 loss_functions:
   - function: cross_entropy

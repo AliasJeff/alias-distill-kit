@@ -15,31 +15,9 @@ from tqdm import tqdm
 
 from distillkit.configuration import DatasetConfiguration, EvaluationConfig
 from distillkit.data_processing import load_data
+from distillkit.logging import setup_file_logging
 
 LOG = logging.getLogger(__name__)
-
-
-def setup_file_logging(output_dir: str, filename: str):
-    """
-    Attach a file handler to the root logger to save logs to a file.
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    log_path = os.path.join(output_dir, filename)
-
-    root_logger = LOG
-
-    for h in root_logger.handlers:
-        if isinstance(h, logging.FileHandler) and h.baseFilename == os.path.abspath(log_path):
-            return
-
-    file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(formatter)
-
-    root_logger.addHandler(file_handler)
-
-    root_logger.info(f"✅ Log file successfully attached to: {log_path}")
-
 
 # Initialize NLTK data (if needed)
 try:
@@ -207,9 +185,9 @@ def generate_texts(  # noqa: C901
     batch_size: int = 8,
     max_length: int = 32768,
     device: str = "cuda",
-) -> tuple[List[str], List[str]]:
+) -> tuple[List[str], List[str], List[str]]:
     """
-    Generate texts and return predictions and references.
+    Generate texts and return predictions, references, and prompts.
     Optimized to use apply_chat_template if structured data is available.
     """
     model.eval()
@@ -217,6 +195,7 @@ def generate_texts(  # noqa: C901
 
     predictions = []
     references = []
+    all_prompts = []
 
     # Configure padding
     if tokenizer.pad_token_id is None:
@@ -323,8 +302,9 @@ def generate_texts(  # noqa: C901
 
         predictions.extend(batch_preds)
         references.extend(batch_references)
+        all_prompts.extend(prompts)
 
-    return predictions, references
+    return predictions, references, all_prompts
 
 
 def evaluate_model(
@@ -369,7 +349,7 @@ def evaluate_model(
 
     # Calculate Generation Metrics (BLEU, F1, ROUGE)
     try:
-        predictions, references = generate_texts(
+        predictions, references, _ = generate_texts(
             model,
             tokenizer,
             dataset,
@@ -423,7 +403,7 @@ def evaluate_all_models(
     """Evaluate all models defined in the configuration."""
     os.makedirs(config.output_path, exist_ok=True)
 
-    setup_file_logging(config.output_path, "evaluation.log")
+    setup_file_logging(LOG, config.output_path, "evaluation.log")
 
     # Load tokenizer
     # Use the first available model path to load the tokenizer
