@@ -430,7 +430,7 @@ def evaluate_main(config_path: str, verbosity: int):  # noqa: C901
     LOG.info(f"Results saved to {eval_config.output_path}/evaluation_results.json")
 
 
-@click.command("test")
+@click.command("infer")
 @click.argument(
     "config_path",
     type=click.Path(exists=True, dir_okay=False, readable=True),
@@ -451,7 +451,7 @@ def evaluate_main(config_path: str, verbosity: int):  # noqa: C901
     type=str,
     default=None,
     help=
-    "Path to save test results. If not provided, uses config output_path or 'outputs/test_results'.",
+    "Path to save infer results. If not provided, uses config output_path or 'outputs/infer_results'.",
 )
 @click.option(
     "--batch-size",
@@ -478,7 +478,7 @@ def evaluate_main(config_path: str, verbosity: int):  # noqa: C901
     count=True,
     help="Increase verbosity of logging. Use -vv for debug level.",
 )
-def test_main(  # noqa: C901
+def infer_main(  # noqa: C901
     config_path: str,
     model_path: str | None,
     num_samples: int | None,
@@ -488,7 +488,7 @@ def test_main(  # noqa: C901
     device: str,
     verbosity: int,
 ):
-    """Test model generation on dataset samples."""
+    """Infer model on dataset samples."""
     log_level = logging.WARNING
     if verbosity >= 2:
         log_level = logging.DEBUG
@@ -528,7 +528,7 @@ def test_main(  # noqa: C901
         output_path = "outputs/test_results"
 
     os.makedirs(output_path, exist_ok=True)
-    setup_file_logging(output_path, "test.log")
+    setup_file_logging(output_path, "infer.log")
 
     LOG.info(f"Testing model: {model_path}")
     LOG.info(f"Output path: {output_path}")
@@ -587,12 +587,12 @@ def test_main(  # noqa: C901
             "reference": ref,
         })
 
-    output_file = os.path.join(output_path, "test_results.json")
+    output_file = os.path.join(output_path, "infer_results.json")
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
 
     # Also save a human-readable text file
-    text_output_file = os.path.join(output_path, "test_results.txt")
+    text_output_file = os.path.join(output_path, "infer_results.txt")
     with open(text_output_file, "w", encoding="utf-8") as f:
         for i, result in enumerate(results):
             f.write(f"{'='*80}\n")
@@ -603,7 +603,7 @@ def test_main(  # noqa: C901
                 f.write(f"Reference:\n{result['reference']}\n\n")
             f.write("\n")
 
-    LOG.info(f"Test results saved to {output_file}")
+    LOG.info(f"Infer results saved to {output_file}")
     LOG.info(f"Human-readable results saved to {text_output_file}")
     LOG.info(f"Generated {len(predictions)} samples")
 

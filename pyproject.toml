@@ -31,7 +31,7 @@ dependencies = [
 train-teacher = "distillkit.main:train_teacher_main"
 distill = "distillkit.main:main"
 evaluate = "distillkit.main:evaluate_main"
-test = "distillkit.main:test_main"
+infer = "distillkit.main:infer_main"
 
 [project.optional-dependencies]
 dev = ["pytest~=9.0.2", "ruff~=0.14.9"]
