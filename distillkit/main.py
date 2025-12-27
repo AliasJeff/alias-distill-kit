@@ -461,7 +461,6 @@ def infer_main(  # noqa: C901
     output_path: str | None,
     batch_size: int,
     max_new_tokens: int,
-    device: str,
     verbosity: int,
 ):
     """Infer model on dataset samples."""
@@ -511,7 +510,6 @@ def infer_main(  # noqa: C901
     LOG.info(f"Number of samples: {num_samples or 'all'}")
     LOG.info(f"Batch size: {batch_size}")
     LOG.info(f"Max new tokens: {max_new_tokens}")
-    LOG.info(f"Device: {device}")
 
     # Load tokenizer
     LOG.info(f"Loading tokenizer from {model_path}")
@@ -533,6 +531,8 @@ def infer_main(  # noqa: C901
         dataset = dataset.select(range(min(dataset_config.num_samples, len(dataset))))
 
     LOG.info(f"Dataset size: {len(dataset)}")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Load model
     LOG.info(f"Loading model from {model_path}")
