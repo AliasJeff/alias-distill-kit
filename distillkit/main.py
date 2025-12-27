@@ -1,4 +1,5 @@
 # Copyright 2025 Arcee AI
+import json
 import logging
 import os
 import re
@@ -18,7 +19,7 @@ from distillkit.configuration import (
     TeacherModelConfig,
 )
 from distillkit.data_processing import load_data
-from distillkit.evaluation import evaluate_all_models
+from distillkit.evaluation import evaluate_all_models, generate_texts
 from distillkit.hsd_mapping import HiddenStateMapping
 from distillkit.monkey_patch_packing import monkey_patch_packing_for_model
 from distillkit.signals import OfflineSignalSource, OnlineSignalSource, SignalSource
@@ -427,6 +428,189 @@ def evaluate_main(config_path: str, verbosity: int):  # noqa: C901
             LOG.info(f"  ROUGE-L: {rouge.get('rougeL', 0):.4f}")
     LOG.info("\n" + "=" * 80)
     LOG.info(f"Results saved to {eval_config.output_path}/evaluation_results.json")
+
+
+@click.command("test")
+@click.argument(
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False, readable=True),
+)
+@click.option(
+    "--model-path",
+    type=str,
+    help="Path to the model to test. If not provided, will try to extract from config.",
+)
+@click.option(
+    "--num-samples",
+    type=int,
+    default=None,
+    help="Number of samples to test. If not provided, uses all samples or config value.",
+)
+@click.option(
+    "--output-path",
+    type=str,
+    default=None,
+    help=
+    "Path to save test results. If not provided, uses config output_path or 'outputs/test_results'.",
+)
+@click.option(
+    "--batch-size",
+    type=int,
+    default=8,
+    help="Batch size for generation.",
+)
+@click.option(
+    "--max-new-tokens",
+    type=int,
+    default=32768,
+    help="Maximum number of new tokens to generate.",
+)
+@click.option(
+    "--device",
+    type=str,
+    default="cuda",
+    help="Device to use for generation (cuda or cpu).",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    "verbosity",
+    count=True,
+    help="Increase verbosity of logging. Use -vv for debug level.",
+)
+def test_main(  # noqa: C901
+    config_path: str,
+    model_path: str | None,
+    num_samples: int | None,
+    output_path: str | None,
+    batch_size: int,
+    max_new_tokens: int,
+    device: str,
+    verbosity: int,
+):
+    """Test model generation on dataset samples."""
+    log_level = logging.WARNING
+    if verbosity >= 2:
+        log_level = logging.DEBUG
+    elif verbosity == 1:
+        log_level = logging.INFO
+    logging.basicConfig(level=log_level)
+
+    # Load config
+    with open(config_path, "r") as f:
+        config_dict = yaml.safe_load(f)
+
+    # Try to parse as distillation config to get dataset and model info
+    try:
+        distill_config = DistillationRunConfig.model_validate(config_dict)
+        dataset_config = distill_config.dataset
+        if model_path is None:
+            model_path = distill_config.train_model
+        if output_path is None:
+            output_path = distill_config.output_path
+    except Exception:
+        # If parsing fails, try to get dataset config separately
+        if "dataset" in config_dict:
+            from distillkit.configuration import DatasetConfiguration
+            dataset_config = DatasetConfiguration.model_validate(config_dict["dataset"])
+        else:
+            raise ValueError("Dataset configuration is required in config file")
+
+        if model_path is None:
+            if "model" in config_dict:
+                model_path = config_dict["model"]
+            elif "train_model" in config_dict:
+                model_path = config_dict["train_model"]
+            else:
+                raise ValueError("Model path must be provided via --model-path or in config file")
+
+    if output_path is None:
+        output_path = "outputs/test_results"
+
+    os.makedirs(output_path, exist_ok=True)
+    setup_file_logging(output_path, "test.log")
+
+    LOG.info(f"Testing model: {model_path}")
+    LOG.info(f"Output path: {output_path}")
+    LOG.info(f"Number of samples: {num_samples or 'all'}")
+    LOG.info(f"Batch size: {batch_size}")
+    LOG.info(f"Max new tokens: {max_new_tokens}")
+    LOG.info(f"Device: {device}")
+
+    # Load tokenizer
+    LOG.info(f"Loading tokenizer from {model_path}")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+    )
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
+    # Load dataset
+    LOG.info("Loading dataset")
+    dataset, _ = load_data(dataset_config, tokenizer)
+
+    # Limit samples if specified
+    if num_samples:
+        dataset = dataset.select(range(min(num_samples, len(dataset))))
+    elif dataset_config.num_samples:
+        dataset = dataset.select(range(min(dataset_config.num_samples, len(dataset))))
+
+    LOG.info(f"Dataset size: {len(dataset)}")
+
+    # Load model
+    LOG.info(f"Loading model from {model_path}")
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+        device_map=device,
+    )
+
+    # Generate texts
+    LOG.info("Starting text generation")
+    predictions, references = generate_texts(
+        model=model,
+        tokenizer=tokenizer,
+        dataset=dataset,
+        batch_size=batch_size,
+        max_length=max_new_tokens,
+        device=device,
+    )
+
+    # Save results
+    results = []
+    for i, (pred, ref) in enumerate(zip(predictions, references)):
+        results.append({
+            "sample_id": i,
+            "generated": pred,
+            "reference": ref,
+        })
+
+    output_file = os.path.join(output_path, "test_results.json")
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
+
+    # Also save a human-readable text file
+    text_output_file = os.path.join(output_path, "test_results.txt")
+    with open(text_output_file, "w", encoding="utf-8") as f:
+        for i, result in enumerate(results):
+            f.write(f"{'='*80}\n")
+            f.write(f"Sample {i+1}\n")
+            f.write(f"{'='*80}\n")
+            f.write(f"Generated:\n{result['generated']}\n\n")
+            if result.get("reference"):
+                f.write(f"Reference:\n{result['reference']}\n\n")
+            f.write("\n")
+
+    LOG.info(f"Test results saved to {output_file}")
+    LOG.info(f"Human-readable results saved to {text_output_file}")
+    LOG.info(f"Generated {len(predictions)} samples")
+
+    # Clean up
+    del model
+    if device == "cuda":
+        torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
