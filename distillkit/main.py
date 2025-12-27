@@ -27,6 +27,21 @@ from distillkit.trainer import DistillationTrainer
 LOG = logging.getLogger(__name__)
 
 
+def setup_file_logging(log_file_path: str):
+    """
+    Attach a file handler to the root logger to save logs to a file.
+    """
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+
+    file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
+    formatter = logging.Formatter(fmt='%(levelname)s:%(name)s:%(message)s')
+    file_handler.setFormatter(formatter)
+
+    root_logger = logging.getLogger()
+    root_logger.addHandler(file_handler)
+    LOG.info(f"Logging to file: {log_file_path}")
+
+
 def load_student_model(  # noqa: C901
     config: DistillationRunConfig,
     tokenizer_vocab_size: int,
@@ -245,7 +260,7 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     LOG.info("Done.")
 
 
-@click.command("distillkit-offline")
+@click.command("distill")
 @click.argument(
     "config_path",
     type=click.Path(exists=True, dir_okay=False, readable=True),
@@ -264,13 +279,21 @@ def main(config_path: str, verbosity: int):
     elif verbosity == 1:
         log_level = logging.INFO
     logging.basicConfig(level=log_level)
+
+    # 1. Load Config
     with open(config_path, "r") as f:
         config_dict = yaml.safe_load(f)
     config = DistillationRunConfig.model_validate(config_dict)
+
+    # 2. Setup File Logging for Distill
+    # Distillation output path usually contains the model artifacts
+    log_file = os.path.join(config.output_path, "distill.log")
+    setup_file_logging(log_file)
+
     do_distill(config)
 
 
-@click.command("distillkit-train-teacher")
+@click.command("train-teacher")
 @click.argument(
     "config_path",
     type=click.Path(exists=True, dir_okay=False, readable=True),
@@ -289,14 +312,23 @@ def train_teacher_main(config_path: str, verbosity: int):
     elif verbosity == 1:
         log_level = logging.INFO
     logging.basicConfig(level=log_level)
+
+    # 1. Load Config
     with open(config_path, "r") as f:
         config_dict = yaml.safe_load(f)
     config = DistillationRunConfig.model_validate(config_dict)
+
+    # 2. Setup File Logging for Teacher Training
+    # Check if teacher_train config exists to avoid error, though validation handles it usually
+    if config.teacher_train and config.teacher_train.output_path:
+        log_file = os.path.join(config.teacher_train.output_path, "teacher_training.log")
+        setup_file_logging(log_file)
+
     accelerator = Accelerator()
     train_teacher(config, accelerator)
 
 
-@click.command("distillkit-evaluate")
+@click.command("evaluate")
 @click.argument(
     "config_path",
     type=click.Path(exists=True, dir_okay=False, readable=True),
@@ -338,6 +370,10 @@ def evaluate_main(config_path: str, verbosity: int):  # noqa: C901
             original_student_path=eval_dict.get("original_student_path"),
             distilled_student_path=eval_dict.get("distilled_student_path"),
         )
+
+    # Setup File Logging for Evaluation
+    log_file = os.path.join(eval_config.output_path, "evaluation.log")
+    setup_file_logging(log_file)
 
     # If config contains distillation config, try to extract model paths from it
     try:
