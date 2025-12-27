@@ -13,7 +13,7 @@ dataset:
     split: train
   seed: 42
   format_function: leet10k_format
-  num_samples: 3000
+  num_samples: 6000
   num_eval_samples: 400
 loss_functions:
   - function: cross_entropy
@@ -35,7 +35,7 @@ teacher_train:
   training_args:
     dataset_text_field: text
     packing: false
-    num_train_epochs: 2
+    num_train_epochs: 3
     per_device_train_batch_size: 1
     gradient_accumulation_steps: 8
     save_steps: 600
@@ -56,7 +56,7 @@ teacher_train:
 training_args:
   dataset_text_field: text
   packing: false
-  num_train_epochs: 1
+  num_train_epochs: 3
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 8
   save_steps: 600

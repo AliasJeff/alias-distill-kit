@@ -482,7 +482,7 @@ def infer_main(  # noqa: C901
         if model_path is None:
             model_path = distill_config.train_model
         if output_path is None:
-            output_path = distill_config.output_path
+            output_path = "outputs/infer_results"
     except Exception:
         # If parsing fails, try to get dataset config separately
         if "dataset" in config_dict:
@@ -498,9 +498,6 @@ def infer_main(  # noqa: C901
                 model_path = config_dict["train_model"]
             else:
                 raise ValueError("Model path must be provided via --model-path or in config file")
-
-    if output_path is None:
-        output_path = "outputs/test_results"
 
     os.makedirs(output_path, exist_ok=True)
     setup_file_logging(LOG, output_path, "infer.log")
