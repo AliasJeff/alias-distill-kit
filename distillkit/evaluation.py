@@ -290,7 +290,9 @@ def generate_texts(  # noqa: C901
                 num_beams=1,
                 do_sample=False,
                 pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
+                eos_token_id=[
+                    tokenizer.convert_tokens_to_ids("<|im_end|>"), tokenizer.eos_token_id
+                ],
             )
 
         # Decode generated text

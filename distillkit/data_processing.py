@@ -59,6 +59,10 @@ def leet10k_format(example, tokenizer):
         },
     ]
 
+    if "Reference:" in output_content:
+        print(f"!!! FOUND REFERENCE IN DATA !!!\nContent snippet: {output_content[:200]}...")
+        output_content = output_content.split("Reference:")[0].strip()
+
     text = tokenizer.apply_chat_template(
         messages,
         tokenize=False,
