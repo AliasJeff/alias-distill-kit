@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from distillkit.configuration import DatasetConfiguration, EvaluationConfig
 from distillkit.data_processing import load_data
-from distillkit.logging import setup_file_logging
+from distillkit.logging_utils import setup_file_logging
 
 LOG = logging.getLogger(__name__)
 
@@ -220,9 +220,14 @@ def generate_texts(  # noqa: C901
                         target_msg = conversation[-1]
 
                         # Apply chat template for the prompt part
-                        prompt_str = tokenizer.apply_chat_template(context_msgs,
-                                                                   tokenize=False,
-                                                                   add_generation_prompt=True)
+                        prompt_str = tokenizer.apply_chat_template(
+                            context_msgs,
+                            tokenize=False,
+                            add_generation_prompt=True,
+                            enable_thinking=False,
+                        )
+                        if not prompt_str.endswith("\n"):
+                            prompt_str += "\n"
                         prompts.append(prompt_str)
 
                         # Extract content from the last message as reference
@@ -287,7 +292,10 @@ def generate_texts(  # noqa: C901
                 attention_mask=inputs.attention_mask,
                 max_new_tokens=max_length,
                 num_beams=1,
-                do_sample=False,
+                do_sample=True,
+                temperature=0.7,
+                top_p=0.9,
+                repetition_penalty=1.1,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=[
                     tokenizer.convert_tokens_to_ids("<|im_end|>"), tokenizer.eos_token_id

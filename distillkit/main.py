@@ -20,7 +20,7 @@ from distillkit.configuration import (
 from distillkit.data_processing import load_data
 from distillkit.evaluation import evaluate_all_models, generate_texts
 from distillkit.hsd_mapping import HiddenStateMapping
-from distillkit.logging import FileLoggerCallback, setup_file_logging
+from distillkit.logging_utils import FileLoggerCallback, setup_file_logging
 from distillkit.monkey_patch_packing import monkey_patch_packing_for_model
 from distillkit.signals import OfflineSignalSource, OnlineSignalSource, SignalSource
 from distillkit.trainer import DistillationTrainer
@@ -83,62 +83,6 @@ def load_student_model(  # noqa: C901
     return model
 
 
-def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> None:
-    if not isinstance(config.teacher, TeacherModelConfig):
-        raise ValueError("Teacher must be a HF model (TeacherModelConfig) for training.")
-    if config.teacher_train is None:
-        raise ValueError("teacher_train configuration must be set to train the teacher model.")
-
-    teacher_cfg = config.teacher_train
-
-    os.makedirs(teacher_cfg.output_path, exist_ok=True)
-
-    teacher_dataset_config = teacher_cfg.dataset or config.dataset
-
-    with accelerator.main_process_first():
-        teacher_tokenizer = load_tokenizer(config)
-        ds_train, ds_eval = load_data(teacher_dataset_config, teacher_tokenizer)
-
-    teacher_model = transformers.AutoModelForCausalLM.from_pretrained(
-        config.teacher.path,
-        trust_remote_code=config.trust_remote_code,
-        **(config.teacher.kwargs or {}),
-    )
-
-    teacher_training_args = dict(teacher_cfg.training_args)
-    dataset_kwargs = teacher_training_args.pop("dataset_kwargs", {})
-    if teacher_dataset_config.prepacked:
-        dataset_kwargs["skip_prepare_dataset"] = True
-    max_length = teacher_training_args.pop("max_length", config.sequence_length)
-    training_arguments = trl.SFTConfig(
-        **teacher_training_args,
-        max_length=max_length,
-        output_dir=teacher_cfg.output_path,
-        dataset_kwargs=dataset_kwargs,
-    )
-
-    teacher_trainer = trl.SFTTrainer(
-        model=teacher_model,
-        args=training_arguments,
-        train_dataset=ds_train,
-        eval_dataset=ds_eval,
-        data_collator=collate_packed_batch if teacher_dataset_config.prepacked else None,
-        processing_class=None if teacher_dataset_config.prepacked else teacher_tokenizer,
-    )
-    teacher_trainer.add_callback(
-        FileLoggerCallback(os.path.join(teacher_cfg.output_path, "teacher_training.jsonl")))
-
-    resume_from_checkpoint = teacher_cfg.training_args.get("resume_from_checkpoint", None)
-
-    LOG.info("Starting teacher training.")
-    teacher_trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-    LOG.info(f"Finished teacher training. Saving teacher model to {teacher_cfg.output_path}.")
-    teacher_trainer.save_model(teacher_cfg.output_path)
-    LOG.info("Done training teacher.")
-
-    config.teacher.path = teacher_cfg.output_path
-
-
 def create_signal_source(config: DistillationRunConfig, vocab_size: int) -> SignalSource:
     if isinstance(config.teacher, TeacherDatasetConfig):
         compressor = LogprobCompressor(
@@ -175,6 +119,68 @@ def load_tokenizer(config: DistillationRunConfig) -> transformers.PreTrainedToke
     )
 
 
+def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> None:
+    if not isinstance(config.teacher, TeacherModelConfig):
+        raise ValueError("Teacher must be a HF model (TeacherModelConfig) for training.")
+    if config.teacher_train is None:
+        raise ValueError("teacher_train configuration must be set to train the teacher model.")
+
+    teacher_cfg = config.teacher_train
+
+    os.makedirs(teacher_cfg.output_path, exist_ok=True)
+
+    teacher_dataset_config = teacher_cfg.dataset or config.dataset
+
+    with accelerator.main_process_first():
+        teacher_tokenizer = load_tokenizer(config)
+        ds_train, ds_eval = load_data(teacher_dataset_config, teacher_tokenizer)
+
+    teacher_model = transformers.AutoModelForCausalLM.from_pretrained(
+        config.teacher.path,
+        trust_remote_code=config.trust_remote_code,
+        **(config.teacher.kwargs or {}),
+    )
+
+    teacher_training_args = dict(teacher_cfg.training_args)
+    dataset_kwargs = teacher_training_args.pop("dataset_kwargs", {})
+    if teacher_dataset_config.prepacked:
+        dataset_kwargs["skip_prepare_dataset"] = True
+    max_length = teacher_training_args.pop("max_length", config.sequence_length)
+    training_arguments = trl.SFTConfig(
+        **teacher_training_args,
+        max_length=max_length,
+        output_dir=teacher_cfg.output_path,
+        dataset_kwargs=dataset_kwargs,
+    )
+
+    print("=" * 80)
+    print("DEBUG: Checking First Training Sample")
+    print(f"Keys: {ds_train[0].keys()}")
+    print(f"Text:\n{repr(ds_train[0]['text'])}")
+    print("=" * 80)
+
+    teacher_trainer = trl.SFTTrainer(
+        model=teacher_model,
+        args=training_arguments,
+        train_dataset=ds_train,
+        eval_dataset=ds_eval,
+        data_collator=collate_packed_batch if teacher_dataset_config.prepacked else None,
+        processing_class=None if teacher_dataset_config.prepacked else teacher_tokenizer,
+    )
+    teacher_trainer.add_callback(
+        FileLoggerCallback(os.path.join(teacher_cfg.output_path, "teacher_training.jsonl")))
+
+    resume_from_checkpoint = teacher_cfg.training_args.get("resume_from_checkpoint", None)
+
+    LOG.info("Starting teacher training.")
+    teacher_trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    LOG.info(f"Finished teacher training. Saving teacher model to {teacher_cfg.output_path}.")
+    teacher_trainer.save_model(teacher_cfg.output_path)
+    LOG.info("Done training teacher.")
+
+    config.teacher.path = teacher_cfg.output_path
+
+
 def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     os.makedirs(config.output_path, exist_ok=True)
     if config_source is None:
@@ -199,6 +205,12 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         )
 
     model = load_student_model(config, tokenizer_vocab_size)
+
+    print("=" * 80)
+    print("DEBUG: Checking First Training Sample")
+    print(f"Keys: {ds_train[0].keys()}")
+    print(f"Text:\n{repr(ds_train[0]['text'])}")
+    print("=" * 80)
 
     config_kwargs = dict(config.training_args)
     dataset_kwargs = config_kwargs.pop("dataset_kwargs", {})

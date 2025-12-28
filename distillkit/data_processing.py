@@ -35,7 +35,12 @@ def gpt_format(example, tokenizer):
 
         # Apply chat template to create a single string.
         # SFTTrainer will handle tokenization.
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+            enable_thinking=False,
+        )
 
         if tokenizer.eos_token and not text.endswith(tokenizer.eos_token):
             text += tokenizer.eos_token
@@ -59,10 +64,6 @@ def leet10k_format(example, tokenizer):
         },
     ]
 
-    if "Reference:" in output_content:
-        print(f"!!! FOUND REFERENCE IN DATA !!!\nContent snippet: {output_content[:200]}...")
-        output_content = output_content.split("Reference:")[0].strip()
-
     text = tokenizer.apply_chat_template(
         messages,
         tokenize=False,
@@ -70,7 +71,10 @@ def leet10k_format(example, tokenizer):
         enable_thinking=False,
     )
 
-    if tokenizer.eos_token and not text.endswith(tokenizer.eos_token):
+    ends_with_im_end = text.strip().endswith("<|im_end|>")
+    ends_with_eos = tokenizer.eos_token and text.strip().endswith(tokenizer.eos_token)
+
+    if not (ends_with_im_end or ends_with_eos) and tokenizer.eos_token:
         text += tokenizer.eos_token
 
     return {"text": text, "messages": messages}
@@ -98,9 +102,12 @@ def _format_row(
         return fn(example, tokenizer)
 
     elif "messages" in example:
-        text = tokenizer.apply_chat_template(example["messages"],
-                                             tokenize=False,
-                                             add_generation_prompt=False)
+        text = tokenizer.apply_chat_template(
+            example["messages"],
+            tokenize=False,
+            add_generation_prompt=False,
+            enable_thinking=False,
+        )
         if tokenizer.eos_token and not text.endswith(tokenizer.eos_token):
             text += tokenizer.eos_token
         return {"text": text, "messages": example["messages"]}
