@@ -1,4 +1,3 @@
-# Copyright 2025 Arcee AI
 import json
 import logging
 import os

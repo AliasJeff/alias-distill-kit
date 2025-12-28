@@ -1,5 +1,3 @@
-# Copyright 2024 Charles O. Goddard
-
 import torch
 from transformers.modeling_outputs import CausalLMOutput
 from typing_extensions import override

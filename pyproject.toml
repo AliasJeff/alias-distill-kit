@@ -24,6 +24,7 @@ dependencies = [
     "sacrebleu>=2.3.0",
     "rouge-score>=0.1.2",
     "nltk>=3.8.0",
+    "matplotlib",
 ]
 
 

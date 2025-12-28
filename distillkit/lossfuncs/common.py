@@ -1,4 +1,3 @@
-# Copyright 2024 Charles O. Goddard
 import math
 from abc import ABC, abstractmethod
 from typing import Callable

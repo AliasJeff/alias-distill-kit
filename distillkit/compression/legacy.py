@@ -1,5 +1,3 @@
-# Copyright 2024 Charles O. Goddard
-
 import torch
 
 from distillkit.compression.config import (

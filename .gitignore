@@ -131,6 +131,6 @@ tb_logs/
 # *.zip
 # *.rar
 
-# Example
-!example/
-!example/*
+# Results example
+!*_results_example/
+!*_results_example/*

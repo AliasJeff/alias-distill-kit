@@ -1,4 +1,3 @@
-# Copyright 2025 Arcee AI
 from enum import Enum
 from typing import Any, Literal
 
