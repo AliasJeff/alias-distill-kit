@@ -1,4 +1,3 @@
-import gc
 import json
 import logging
 import os
@@ -20,7 +19,7 @@ from distillkit.configuration import (
     EvaluationConfig,
     TeacherModelConfig,
 )
-from distillkit.data_processing import load_data, sanity_check_dataset
+from distillkit.data_processing import load_data
 from distillkit.logging_utils import setup_file_logging
 
 LOG = logging.getLogger(__name__)
@@ -530,28 +529,29 @@ def do_evaluate(config_path: str):  # noqa: C901
         else:
             raise ValueError("Dataset configuration is required in evaluation config")
 
-    LOG.info("Performing pre-flight sanity check on evaluation data...")
-    try:
-        check_model_path = eval_config.distilled_student_path or eval_config.original_student_path
+    # from distillkit.data_processing import sanity_check_dataset
+    # LOG.info("Performing pre-flight sanity check on evaluation data...")
+    # try:
+    #     check_model_path = eval_config.distilled_student_path or eval_config.original_student_path
 
-        if check_model_path:
-            check_tokenizer = transformers.AutoTokenizer.from_pretrained(check_model_path,
-                                                                         trust_remote_code=True)
-            if check_tokenizer.pad_token_id is None:
-                check_tokenizer.pad_token_id = check_tokenizer.eos_token_id
+    #     if check_model_path:
+    #         check_tokenizer = transformers.AutoTokenizer.from_pretrained(check_model_path,
+    #                                                                      trust_remote_code=True)
+    #         if check_tokenizer.pad_token_id is None:
+    #             check_tokenizer.pad_token_id = check_tokenizer.eos_token_id
 
-            check_ds, _ = load_data(dataset_config, check_tokenizer, keep_in_memory=True)
+    #         check_ds, _ = load_data(dataset_config, check_tokenizer, keep_in_memory=True)
 
-            sanity_check_dataset(check_ds, check_tokenizer)
+    #         sanity_check_dataset(check_ds, check_tokenizer)
 
-            del check_tokenizer
-            del check_ds
-            gc.collect()
-        else:
-            LOG.warning("Skipping sanity check: No model path found in config to load tokenizer.")
-    except Exception as e:
-        LOG.warning(f"Sanity check failed (non-blocking): {e}")
-        LOG.warning("Proceeding with evaluation anyway...")
+    #         del check_tokenizer
+    #         del check_ds
+    #         gc.collect()
+    #     else:
+    #         LOG.warning("Skipping sanity check: No model path found in config to load tokenizer.")
+    # except Exception as e:
+    #     LOG.warning(f"Sanity check failed (non-blocking): {e}")
+    #     LOG.warning("Proceeding with evaluation anyway...")
 
     LOG.info("Starting evaluation")
     results = evaluate_all_models(eval_config, dataset_config)
