@@ -1,3 +1,4 @@
+import gc
 import json
 import logging
 import os
@@ -6,14 +7,20 @@ from typing import Any, List, Dict
 import numpy as np
 import torch
 import transformers
+import yaml
 from datasets import Dataset
 from nltk.tokenize import word_tokenize
 from rouge_score import rouge_scorer
 from sacrebleu import BLEU
 from tqdm import tqdm
 
-from distillkit.configuration import DatasetConfiguration, EvaluationConfig
-from distillkit.data_processing import load_data
+from distillkit.configuration import (
+    DatasetConfiguration,
+    DistillationRunConfig,
+    EvaluationConfig,
+    TeacherModelConfig,
+)
+from distillkit.data_processing import load_data, sanity_check_dataset
 from distillkit.logging_utils import setup_file_logging
 
 LOG = logging.getLogger(__name__)
@@ -468,3 +475,232 @@ def evaluate_all_models(
     LOG.info(f"Evaluation results saved to {output_file}")
 
     return all_results
+
+
+def do_evaluate(config_path: str):  # noqa: C901
+    """Main evaluation logic extracted from evaluate_main."""
+    with open(config_path, "r") as f:
+        config_dict = yaml.safe_load(f)
+
+    # Try to read evaluation config from evaluation section, otherwise read from top level
+    eval_dict = config_dict.get("evaluation", config_dict)
+
+    # Try to parse as evaluation config
+    try:
+        eval_config = EvaluationConfig.model_validate(eval_dict)
+    except Exception:
+        # If parsing fails, create a minimal config
+        eval_config = EvaluationConfig(
+            output_path=eval_dict.get("output_path", "outputs/evaluation_results"),
+            max_new_tokens=eval_dict.get("max_new_tokens"),
+            batch_size=eval_dict.get("batch_size", 8),
+            num_samples=eval_dict.get("num_samples"),
+            device=eval_dict.get("device", "cuda"),
+            original_teacher_path=eval_dict.get("original_teacher_path"),
+            trained_teacher_path=eval_dict.get("trained_teacher_path"),
+            original_student_path=eval_dict.get("original_student_path"),
+            distilled_student_path=eval_dict.get("distilled_student_path"),
+        )
+
+    # If config contains distillation config, try to extract model paths from it
+    try:
+        distill_config = DistillationRunConfig.model_validate(config_dict)
+        # If paths in evaluation config are empty, try to get them from distillation config
+        if eval_config.original_teacher_path is None and isinstance(distill_config.teacher,
+                                                                    TeacherModelConfig):
+            eval_config.original_teacher_path = distill_config.teacher.path
+
+        if eval_config.trained_teacher_path is None and distill_config.teacher_train:
+            eval_config.trained_teacher_path = distill_config.teacher_train.output_path
+
+        if eval_config.original_student_path is None:
+            eval_config.original_student_path = distill_config.train_model
+
+        if eval_config.distilled_student_path is None:
+            eval_config.distilled_student_path = distill_config.output_path
+
+        # Use dataset configuration from distillation config
+        dataset_config = distill_config.dataset
+    except Exception:
+        # If parsing fails, try to get dataset config from evaluation config
+        if "dataset" in config_dict:
+            dataset_config = DatasetConfiguration.model_validate(config_dict["dataset"])
+        elif "dataset" in eval_dict:
+            dataset_config = DatasetConfiguration.model_validate(eval_dict["dataset"])
+        else:
+            raise ValueError("Dataset configuration is required in evaluation config")
+
+    LOG.info("Performing pre-flight sanity check on evaluation data...")
+    try:
+        check_model_path = eval_config.distilled_student_path or eval_config.original_student_path
+
+        if check_model_path:
+            check_tokenizer = transformers.AutoTokenizer.from_pretrained(check_model_path,
+                                                                         trust_remote_code=True)
+            if check_tokenizer.pad_token_id is None:
+                check_tokenizer.pad_token_id = check_tokenizer.eos_token_id
+
+            check_ds, _ = load_data(dataset_config, check_tokenizer, keep_in_memory=True)
+
+            sanity_check_dataset(check_ds, check_tokenizer)
+
+            del check_tokenizer
+            del check_ds
+            gc.collect()
+        else:
+            LOG.warning("Skipping sanity check: No model path found in config to load tokenizer.")
+    except Exception as e:
+        LOG.warning(f"Sanity check failed (non-blocking): {e}")
+        LOG.warning("Proceeding with evaluation anyway...")
+
+    LOG.info("Starting evaluation")
+    results = evaluate_all_models(eval_config, dataset_config)
+
+    # Print summary
+    LOG.info("\n" + "=" * 80)
+    LOG.info("Evaluation Summary")
+    LOG.info("=" * 80)
+    for model_name, model_results in results.items():
+        LOG.info(f"\n{model_name}:")
+        if "ppl" in model_results and model_results["ppl"] is not None:
+            LOG.info(f"  PPL: {model_results['ppl']:.4f}")
+        if "bleu" in model_results and model_results["bleu"] is not None:
+            LOG.info(f"  BLEU: {model_results['bleu']:.4f}")
+        if "f1" in model_results and model_results["f1"] is not None:
+            LOG.info(f"  F1: {model_results['f1']:.4f}")
+        if "rouge" in model_results and model_results["rouge"] is not None:
+            rouge = model_results["rouge"]
+            LOG.info(f"  ROUGE-1: {rouge.get('rouge1', 0):.4f}")
+            LOG.info(f"  ROUGE-2: {rouge.get('rouge2', 0):.4f}")
+            LOG.info(f"  ROUGE-L: {rouge.get('rougeL', 0):.4f}")
+    LOG.info("\n" + "=" * 80)
+    LOG.info(f"Results saved to {eval_config.output_path}/evaluation_results.json")
+
+
+def do_infer(  # noqa: C901
+    config_path: str,
+    model_path: str | None,
+    num_samples: int | None,
+    output_path: str | None,
+    batch_size: int,
+    max_new_tokens: int,
+):
+    """Main inference logic extracted from infer_main."""
+    # Load config
+    with open(config_path, "r") as f:
+        config_dict = yaml.safe_load(f)
+
+    # Try to parse as distillation config to get dataset and model info
+    try:
+        distill_config = DistillationRunConfig.model_validate(config_dict)
+        dataset_config = distill_config.dataset
+        if model_path is None:
+            model_path = distill_config.train_model
+        if output_path is None:
+            output_path = "outputs/infer_results"
+    except Exception:
+        # If parsing fails, try to get dataset config separately
+        if "dataset" in config_dict:
+            dataset_config = DatasetConfiguration.model_validate(config_dict["dataset"])
+        else:
+            raise ValueError("Dataset configuration is required in config file")
+
+        if model_path is None:
+            if "model" in config_dict:
+                model_path = config_dict["model"]
+            elif "train_model" in config_dict:
+                model_path = config_dict["train_model"]
+            else:
+                raise ValueError("Model path must be provided via --model-path or in config file")
+
+    os.makedirs(output_path, exist_ok=True)
+    setup_file_logging(LOG, output_path, "infer.log")
+
+    LOG.info(f"Testing model: {model_path}")
+    LOG.info(f"Output path: {output_path}")
+    LOG.info(f"Number of samples: {num_samples or 'all'}")
+    LOG.info(f"Batch size: {batch_size}")
+    LOG.info(f"Max new tokens: {max_new_tokens}")
+
+    # Load tokenizer
+    LOG.info(f"Loading tokenizer from {model_path}")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+    )
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
+    # Load dataset
+    LOG.info("Loading dataset")
+    dataset, _ = load_data(dataset_config, tokenizer)
+
+    # Limit samples if specified
+    if num_samples:
+        dataset = dataset.select(range(min(num_samples, len(dataset))))
+    elif dataset_config.num_samples:
+        dataset = dataset.select(range(min(dataset_config.num_samples, len(dataset))))
+
+    LOG.info(f"Dataset size: {len(dataset)}")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Load model
+    LOG.info(f"Loading model from {model_path}")
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+    )
+
+    model.eval()
+    model = model.to(device)
+
+    # Generate texts
+    LOG.info("Starting text generation")
+    with torch.no_grad():
+        predictions, references, prompts = generate_texts(
+            model=model,
+            tokenizer=tokenizer,
+            dataset=dataset,
+            batch_size=batch_size,
+            max_length=max_new_tokens,
+            device=device,
+        )
+
+    # Save results
+    results = []
+    for i, (pred, ref, prompt) in enumerate(zip(predictions, references, prompts)):
+        results.append({
+            "sample_id": i,
+            "prompt": prompt,
+            "generated": pred,
+            "reference": ref,
+        })
+
+    output_file = os.path.join(output_path, "infer_results.json")
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
+
+    # Also save a human-readable text file
+    text_output_file = os.path.join(output_path, "infer_results.txt")
+    with open(text_output_file, "w", encoding="utf-8") as f:
+        for i, result in enumerate(results):
+            f.write(f"{'='*80}\n")
+            f.write(f"Sample {i+1}\n")
+            f.write(f"{'='*80}\n")
+            if result.get("prompt"):
+                f.write(f"Prompt:\n{result['prompt']}\n\n")
+            f.write(f"Generated:\n{result['generated']}\n\n")
+            if result.get("reference"):
+                f.write(f"Reference:\n{result['reference']}\n\n")
+            f.write("\n")
+
+    LOG.info(f"Infer results saved to {output_file}")
+    LOG.info(f"Human-readable results saved to {text_output_file}")
+    LOG.info(f"Generated {len(predictions)} samples")
+
+    # Clean up
+    del model
+    if device == "cuda":
+        torch.cuda.empty_cache()
