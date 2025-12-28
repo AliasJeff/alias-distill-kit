@@ -17,7 +17,7 @@ from distillkit.configuration import (
     TeacherDatasetConfig,
     TeacherModelConfig,
 )
-from distillkit.data_processing import load_data
+from distillkit.data_processing import load_data, sanity_check_dataset
 from distillkit.evaluation import evaluate_all_models, generate_texts
 from distillkit.hsd_mapping import HiddenStateMapping
 from distillkit.logging_utils import FileLoggerCallback, setup_file_logging
@@ -26,6 +26,43 @@ from distillkit.signals import OfflineSignalSource, OnlineSignalSource, SignalSo
 from distillkit.trainer import DistillationTrainer
 
 LOG = logging.getLogger(__name__)
+
+
+class DataCollatorForCompletionOnlyLM(transformers.DataCollatorForLanguageModeling):
+
+    def __init__(self, response_template, tokenizer, mlm=False):
+        super().__init__(tokenizer, mlm=mlm)
+        self.response_template = response_template
+        self.tokenizer = tokenizer
+
+        if isinstance(response_template, str):
+            self.response_token_ids = self.tokenizer.encode(self.response_template,
+                                                            add_special_tokens=False)
+        else:
+            self.response_token_ids = response_template
+
+    def torch_call(self, examples):
+        batch = super().torch_call(examples)
+
+        labels = batch["labels"].clone()
+
+        for i in range(len(examples)):
+            response_token_ids_start_idx = None
+
+            for idx in range(len(labels[i]) - len(self.response_token_ids) + 1):
+                if torch.all(labels[i][idx:idx + len(self.response_token_ids)] == torch.tensor(
+                        self.response_token_ids)):
+                    response_token_ids_start_idx = idx
+                    break
+
+            if response_token_ids_start_idx is None:
+                labels[i, :] = -100
+            else:
+                response_start = response_token_ids_start_idx + len(self.response_token_ids)
+                labels[i, :response_start] = -100
+
+        batch["labels"] = labels
+        return batch
 
 
 def load_student_model(  # noqa: C901
@@ -153,18 +190,26 @@ def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> No
         dataset_kwargs=dataset_kwargs,
     )
 
-    print("=" * 80)
-    print("DEBUG: Checking First Training Sample")
-    print(f"Keys: {ds_train[0].keys()}")
-    print(f"Text:\n{repr(ds_train[0]['text'])}")
-    print("=" * 80)
+    response_template = "<|im_start|>assistant\n"
+    response_template_ids = teacher_tokenizer.encode(response_template, add_special_tokens=False)
+
+    collator = DataCollatorForCompletionOnlyLM(response_template=response_template_ids,
+                                               tokenizer=teacher_tokenizer)
+
+    check_max_len = config.sequence_length
+    sanity_check_dataset(
+        ds_train,
+        teacher_tokenizer,
+        max_length=check_max_len,
+        data_collator=collator,
+    )
 
     teacher_trainer = trl.SFTTrainer(
         model=teacher_model,
         args=training_arguments,
         train_dataset=ds_train,
         eval_dataset=ds_eval,
-        data_collator=collate_packed_batch if teacher_dataset_config.prepacked else None,
+        data_collator=collate_packed_batch if teacher_dataset_config.prepacked else collator,
         processing_class=None if teacher_dataset_config.prepacked else teacher_tokenizer,
     )
     teacher_trainer.add_callback(
@@ -206,12 +251,6 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
 
     model = load_student_model(config, tokenizer_vocab_size)
 
-    print("=" * 80)
-    print("DEBUG: Checking First Training Sample")
-    print(f"Keys: {ds_train[0].keys()}")
-    print(f"Text:\n{repr(ds_train[0]['text'])}")
-    print("=" * 80)
-
     config_kwargs = dict(config.training_args)
     dataset_kwargs = config_kwargs.pop("dataset_kwargs", {})
     if config.dataset.prepacked:
@@ -241,6 +280,20 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         )
     else:
         hsm = None
+
+    response_template = "<|im_start|>assistant\n"
+    response_template_ids = tokenizer.encode(response_template, add_special_tokens=False)
+    collator = DataCollatorForCompletionOnlyLM(response_template=response_template_ids,
+                                               tokenizer=tokenizer)
+
+    check_max_len = config.sequence_length
+    sanity_check_dataset(
+        ds_train,
+        tokenizer,
+        max_length=check_max_len,
+        data_collator=collator,
+    )
+
     trainer = DistillationTrainer(
         model=model,
         config=config,
@@ -398,6 +451,30 @@ def evaluate_main(config_path: str, verbosity: int):  # noqa: C901
             dataset_config = DatasetConfiguration.model_validate(eval_dict["dataset"])
         else:
             raise ValueError("Dataset configuration is required in evaluation config")
+
+    LOG.info("Performing pre-flight sanity check on evaluation data...")
+    try:
+        check_model_path = eval_config.distilled_student_path or eval_config.original_student_path
+
+        if check_model_path:
+            check_tokenizer = transformers.AutoTokenizer.from_pretrained(check_model_path,
+                                                                         trust_remote_code=True)
+            if check_tokenizer.pad_token_id is None:
+                check_tokenizer.pad_token_id = check_tokenizer.eos_token_id
+
+            check_ds, _ = load_data(dataset_config, check_tokenizer, keep_in_memory=True)
+
+            sanity_check_dataset(check_ds, check_tokenizer)
+
+            del check_tokenizer
+            del check_ds
+            import gc
+            gc.collect()
+        else:
+            LOG.warning("Skipping sanity check: No model path found in config to load tokenizer.")
+    except Exception as e:
+        LOG.warning(f"Sanity check failed (non-blocking): {e}")
+        LOG.warning("Proceeding with evaluation anyway...")
 
     LOG.info("Starting evaluation")
     results = evaluate_all_models(eval_config, dataset_config)

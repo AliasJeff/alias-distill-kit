@@ -196,7 +196,6 @@ def generate_texts(  # noqa: C901
     references = []
     all_prompts = []
 
-    # Configure padding
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
@@ -211,15 +210,11 @@ def generate_texts(  # noqa: C901
             raw_data = batch.get("messages", batch.get("conversations"))
 
             for conversation in raw_data:
-                # Handle generic list of dicts structure
                 if isinstance(conversation, list):
-                    # We assume the last message is the target (assistant response)
-                    # and the preceding messages are the context (user prompt/history)
                     if len(conversation) > 0:
                         context_msgs = conversation[:-1]
                         target_msg = conversation[-1]
 
-                        # Apply chat template for the prompt part
                         prompt_str = tokenizer.apply_chat_template(
                             context_msgs,
                             tokenize=False,
@@ -230,7 +225,6 @@ def generate_texts(  # noqa: C901
                             prompt_str += "\n"
                         prompts.append(prompt_str)
 
-                        # Extract content from the last message as reference
                         ref_content = target_msg.get("content", target_msg.get("value", ""))
                         batch_references.append(ref_content)
                     else:

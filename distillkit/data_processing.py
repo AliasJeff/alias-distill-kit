@@ -224,3 +224,86 @@ def load_data(
             format_function=config.format_function,
         )
     return ds_train, ds_eval
+
+
+def sanity_check_dataset(dataset, tokenizer, max_length=2048, data_collator=None):  # noqa: C901
+    LOG.info("=" * 80)
+    LOG.info("🔍 Deep Sanity Check of Training Data & Masking")
+
+    num_check = 1
+
+    for i in range(num_check):
+        sample = dataset[i]
+        LOG.info(f"\n--- Sample {i} ---")
+
+        if 'text' in sample:
+            text = sample['text']
+            LOG.info(f"Raw Text Length: {len(text)} chars")
+
+            input_ids = tokenizer(text, truncation=True, max_length=max_length)["input_ids"]
+        elif 'input_ids' in sample:
+            input_ids = sample['input_ids']
+        else:
+            LOG.warning("Skipping sample: format unknown.")
+            continue
+
+        if data_collator is not None:
+            LOG.info("🧪 Testing DataCollator (Masking Check)...")
+
+            if 'input_ids' in sample:
+                batch_input = [sample]
+            else:
+                batch_input = [{"input_ids": input_ids, "attention_mask": [1] * len(input_ids)}]
+
+            try:
+                batch = data_collator(batch_input)
+
+                labels = batch["labels"][0]
+                input_ids_processed = batch["input_ids"][0]
+
+                total_tokens = len(labels)
+                masked_tokens = (labels == -100).sum().item()
+                trained_tokens = total_tokens - masked_tokens
+
+                LOG.info(
+                    f"Masking Statistics: Total={total_tokens}, Masked={masked_tokens} (Prompt), Trained={trained_tokens} (Answer)"
+                )
+
+                if masked_tokens == 0:
+                    LOG.warning(
+                        "⚠️  [CRITICAL ALERT] No tokens are masked! You are training on the Prompt/Instruction!"
+                    )
+                elif trained_tokens == 0:
+                    LOG.warning(
+                        "⚠️  [CRITICAL ALERT] All tokens are masked! The model will learn nothing.")
+                else:
+                    LOG.info("✅ Masking seems to be working (Mixed -100 and IDs).")
+
+                start_train_idx = (labels != -100).nonzero(as_tuple=True)[0]
+
+                if len(start_train_idx) > 0:
+                    idx = start_train_idx[0].item()
+
+                    context_start = max(0, idx - 20)
+                    context_end = min(total_tokens, idx + 20)
+
+                    tokens_preview = input_ids_processed[context_start:context_end]
+                    labels_preview = labels[context_start:context_end]
+
+                    LOG.info(f"\n🔍 Visualizing Prompt/Response Boundary at token index {idx}:")
+
+                    preview_text = ""
+                    for t_id, t_label in zip(tokens_preview, labels_preview):
+                        token_str = tokenizer.decode([t_id]).replace("\n", "\\n")
+                        if t_label == -100:
+                            preview_text += f"\033[90m{token_str}\033[0m"
+                        else:
+                            preview_text += f"\033[92m{token_str}\033[0m"
+
+                    LOG.info(f"(Gray=Masked, Green=Trained): ...{preview_text}...")
+                    LOG.info("(If you don't see colors: check logs directly in terminal)")
+
+            except Exception as e:
+                LOG.error(f"Failed to run data_collator check: {e}")
+
+    LOG.info("=" * 80)

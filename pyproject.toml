@@ -12,7 +12,7 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "trl~=0.25.1",
+    "trl~=0.26.2",
     "accelerate~=1.11.0",
     "transformers>=4.50.3",
     "datasets>=3.5.0",
