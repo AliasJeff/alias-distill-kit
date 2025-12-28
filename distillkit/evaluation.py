@@ -37,9 +37,9 @@ def calculate_ppl(
     model: transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizer,
     dataset: Dataset,
-    batch_size: int = 8,
+    batch_size: int = 4,
     device: str = "cuda",
-    max_new_tokens: int = 32768,
+    max_new_tokens: int = 2048,
 ) -> float:
     """Calculate the Perplexity (PPL) of the model."""
     model.eval()
@@ -189,7 +189,7 @@ def generate_texts(  # noqa: C901
     tokenizer: transformers.PreTrainedTokenizer,
     dataset: Dataset,
     batch_size: int = 8,
-    max_length: int = 32768,
+    max_length: int = 2048,
     device: str = "cuda",
 ) -> tuple[List[str], List[str], List[str]]:
     """
@@ -493,7 +493,7 @@ def do_evaluate(config_path: str):  # noqa: C901
         eval_config = EvaluationConfig(
             output_path=eval_dict.get("output_path", "outputs/evaluation_results"),
             max_new_tokens=eval_dict.get("max_new_tokens"),
-            batch_size=eval_dict.get("batch_size", 8),
+            batch_size=eval_dict.get("batch_size", 4),
             num_samples=eval_dict.get("num_samples"),
             device=eval_dict.get("device", "cuda"),
             original_teacher_path=eval_dict.get("original_teacher_path"),

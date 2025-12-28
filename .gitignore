@@ -90,7 +90,6 @@ results_teacher/
 results_output/
 checkpoints/
 outputs/
-logs/
 *.log
 
 # Dataset
@@ -134,3 +133,4 @@ tb_logs/
 # Results example
 !*_results_example/
 !*_results_example/*
+!*_results_example/logs/*.log

@@ -78,8 +78,8 @@ training_args:
 # Evaluation configuration
 evaluation:
   output_path: outputs/evaluation_results
-  max_new_tokens: 32768 # Maximum length for generated text
-  batch_size: 8 # Batch size for evaluation
+  max_new_tokens: 2048 # Maximum length for generated text
+  batch_size: 4 # Batch size for evaluation
   num_samples: 400 # Number of evaluation samples (None means use all)
   device: cuda # Device: cuda or cpu
   # The following paths will be automatically extracted from the config above if not specified
