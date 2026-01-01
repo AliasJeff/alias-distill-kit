@@ -1,37 +1,72 @@
 {
     "version": "0.2.0",
     "configurations": [
+        // 1. Train Teacher
         {
-            "name": "Python: Current File",
+            "name": "Debug: Train Teacher",
             "type": "python",
             "request": "launch",
             "python": "${workspaceFolder}/venv/bin/python",
-            "program": "${file}",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            }
-        },
-        {
-            "name": "Debug train_teacher",
-            "type": "python",
-            "request": "launch",
-            "python": "${workspaceFolder}/venv/bin/python",
-            "program": "${workspaceFolder}/main.py",
+            "program": "${workspaceFolder}/distillkit/debug.py",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
             },
-            "args": ["train-teacher"]
+            "args": [
+                "train-teacher",
+                "qwen_afm_distill.yml",
+                "-v"
+            ]
         },
+        // 2. Distill (Student Training)
         {
-            "name": "Debug distillation",
+            "name": "Debug: Distillation",
             "type": "python",
             "request": "launch",
             "python": "${workspaceFolder}/venv/bin/python",
-            "program": "${workspaceFolder}/main.py",
+            "program": "${workspaceFolder}/distillkit/debug.py",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
             },
-            "args": ["train"]
+            "args": [
+                "distill",
+                "qwen_afm_distill.yml",
+                "-v"
+            ]
+        },
+        // 3. Evaluate
+        {
+            "name": "Debug: Evaluate",
+            "type": "python",
+            "request": "launch",
+            "python": "${workspaceFolder}/venv/bin/python",
+            "program": "${workspaceFolder}/distillkit/debug.py",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "args": [
+                "evaluate",
+                "qwen_afm_distill.yml",
+                "-v"
+            ]
+        },
+        // 4. Inference
+        {
+            "name": "Debug: Infer",
+            "type": "python",
+            "request": "launch",
+            "python": "${workspaceFolder}/venv/bin/python",
+            "program": "${workspaceFolder}/distillkit/debug.py",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "args": [
+                "infer",
+                "qwen_afm_distill.yml",
+                "--num-samples", "3",
+                "--model-path", "outputs/models/qwen3-0.6b-student",
+                "-v",
+                "--max-new-tokens", "2048"
+            ]
         }
     ]
 }

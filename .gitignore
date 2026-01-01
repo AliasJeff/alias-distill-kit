@@ -23,6 +23,31 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
 # Virtual environments
 venv/
 ENV/
@@ -53,13 +78,6 @@ dmypy.json
 .pyre/
 .pytype/
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.hypothesis/
-
 # Model and data files
 *.pth
 *.pt
@@ -72,7 +90,6 @@ results_teacher/
 results_output/
 checkpoints/
 outputs/
-logs/
 *.log
 
 # Dataset
@@ -113,6 +130,7 @@ tb_logs/
 # *.zip
 # *.rar
 
-# Example
-!example/
-!example/*
+# Results example
+!*_results_example/
+!*_results_example/*
+!*_results_example/logs/*.log

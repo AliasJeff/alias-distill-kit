@@ -1,0 +1,309 @@
+import hashlib
+import json
+import logging
+import os
+from typing import Any
+
+import datasets
+import transformers
+
+from distillkit.configuration import (
+    DatasetConfiguration,
+    DatasetPath,
+    HfRepoDataset,
+    LocalDataset,
+)
+
+LOG = logging.getLogger(__name__)
+
+
+def gpt_format(example, tokenizer):
+    if "conversations" in example:
+        conversations = example["conversations"]
+        messages = []
+        for conversation in conversations:
+            role_map = {
+                "human": "user",
+                "user": "user",
+                "gpt": "assistant",
+                "assistant": "assistant",
+                "system": "system",
+            }
+            role = role_map.get(conversation.get("from", ""), None)
+            if role:
+                messages.append({"role": role, "content": conversation.get("value", "")})
+
+        # Apply chat template to create a single string.
+        # SFTTrainer will handle tokenization.
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+            enable_thinking=False,
+        )
+
+        if tokenizer.eos_token and not text.endswith(tokenizer.eos_token):
+            text += tokenizer.eos_token
+
+        return {"text": text, "messages": messages}
+    else:
+        raise RuntimeError("Expected `conversations` column")
+
+
+def leet10k_format(example, tokenizer):
+    output_content = example.get('output')
+
+    messages = [
+        {
+            "role": "user",
+            "content": f"{example['instruction']}\n\n{example['input']}"
+        },
+        {
+            "role": "assistant",
+            "content": output_content
+        },
+    ]
+
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=False,
+        enable_thinking=False,
+    )
+
+    ends_with_im_end = text.strip().endswith("<|im_end|>")
+    ends_with_eos = tokenizer.eos_token and text.strip().endswith(tokenizer.eos_token)
+
+    if not (ends_with_im_end or ends_with_eos) and tokenizer.eos_token:
+        text += tokenizer.eos_token
+
+    return {"text": text, "messages": messages}
+
+
+FORMAT_FUNCTIONS = {
+    "gpt_format": gpt_format,
+    "leet10k_format": leet10k_format,
+}
+
+
+def _format_row(
+    example: dict[str, Any],
+    tokenizer: transformers.PreTrainedTokenizer,
+    format_function: str | None = None,
+) -> dict[str, Any]:
+    if ("input_ids" in example) or ("text" in example):
+        # either pretokenized or raw completion - no formatting needed
+        return {}
+
+    if format_function:
+        fn = FORMAT_FUNCTIONS.get(format_function)
+        if fn is None:
+            raise RuntimeError(f"Unknown format_function: {format_function}")
+        return fn(example, tokenizer)
+
+    elif "messages" in example:
+        text = tokenizer.apply_chat_template(
+            example["messages"],
+            tokenize=False,
+            add_generation_prompt=False,
+            enable_thinking=False,
+        )
+        if tokenizer.eos_token and not text.endswith(tokenizer.eos_token):
+            text += tokenizer.eos_token
+        return {"text": text, "messages": example["messages"]}
+    else:
+        raise RuntimeError("Expected `text`, `messages`, or `conversations` column")
+
+
+def _load_dataset(  # noqa: C901
+    path: DatasetPath,
+    seed: int | None,
+    num_samples: int | None,
+    tokenizer: transformers.PreTrainedTokenizer,
+    prepared_dataset_path: str | None = None,
+    keep_in_memory: bool | None = None,
+    prepacked: bool = False,
+    format_function: str | None = None,
+) -> datasets.Dataset:
+    if prepared_dataset_path:
+        honk = json.dumps({
+            "path": path.model_dump(),
+            "seed": seed,
+            "num_samples": num_samples,
+            "format_function": format_function,
+        })
+        logging.info(f"Dataset spec: {honk}")
+        ds_hash = hashlib.sha256(honk.encode()).hexdigest()
+        full_prepared_path = os.path.join(prepared_dataset_path, f"dataset-{ds_hash}")
+        if os.path.exists(full_prepared_path):
+            return datasets.load_from_disk(full_prepared_path)
+    else:
+        full_prepared_path = None
+    if isinstance(path, HfRepoDataset):
+        res = datasets.load_dataset(
+            path.repo_id,
+            name=path.config_name,
+            revision=path.revision,
+            split=path.split,
+            keep_in_memory=keep_in_memory,
+        )
+    elif isinstance(path, LocalDataset):
+        res = datasets.load_from_disk(path.disk_path, keep_in_memory=keep_in_memory)
+        if path.split:
+            res = res[path.split]
+        elif isinstance(res, datasets.DatasetDict):
+            raise ValueError("Dataset dict found but no split specified. Please specify a split.")
+    else:
+        raise ValueError(
+            "Unsupported dataset type. Please provide a valid Hugging Face repo ID or local dataset path."
+        )
+
+    if prepacked:
+        last_idx = len(res) - 1
+        while len(res) >= 2 and len(res[last_idx]["input_ids"]) != len(res[0]["input_ids"]):
+            last_idx -= 1
+        if last_idx <= 0:
+            raise RuntimeError("Dataset config is probs wrong")
+        res = res.select(range(last_idx + 1))
+
+    if seed:
+        res = res.shuffle(seed=seed)
+    if num_samples:
+        res = res.select(range(num_samples))
+    if ((not prepacked) and ("text" not in res.column_names)
+            and ("input_ids" not in res.column_names)):
+        res = res.map(
+            _format_row,
+            remove_columns=res.column_names,
+            fn_kwargs={
+                "tokenizer": tokenizer,
+                "format_function": format_function,
+            },
+        )
+    if full_prepared_path:
+        os.makedirs(full_prepared_path, exist_ok=True)
+        logging.info(
+            f"Saving prepared dataset to {full_prepared_path} (hash: {ds_hash}, path: {path}, seed: {seed}, num_samples: {num_samples})"
+        )
+        res.save_to_disk(full_prepared_path)
+        del res
+        return datasets.load_from_disk(full_prepared_path, keep_in_memory=keep_in_memory)
+    return res
+
+
+def load_data(
+    config: DatasetConfiguration,
+    tokenizer: transformers.PreTrainedTokenizer,
+    keep_in_memory: bool | None = None,
+) -> tuple[datasets.Dataset, datasets.Dataset | None]:
+    """
+    Load the train (and optionally eval) datasets as specified in the configuration.
+    """
+
+    LOG.info(f"Loading datasets: {config.train_dataset} (train), {config.eval_dataset} (eval)")
+    ds_train = _load_dataset(
+        config.train_dataset,
+        config.seed,
+        config.num_samples,
+        tokenizer=tokenizer,
+        prepared_dataset_path=config.prepared_dataset_path,
+        keep_in_memory=keep_in_memory,
+        prepacked=config.prepacked,
+        format_function=config.format_function,
+    )
+    ds_eval = None
+    if config.eval_dataset:
+        ds_eval = _load_dataset(
+            config.eval_dataset,
+            config.seed,
+            config.num_eval_samples,
+            tokenizer=tokenizer,
+            prepared_dataset_path=config.prepared_dataset_path,
+            keep_in_memory=keep_in_memory,
+            prepacked=config.prepacked,
+            format_function=config.format_function,
+        )
+    return ds_train, ds_eval
+
+
+def sanity_check_dataset(dataset, tokenizer, max_length=2048, data_collator=None):  # noqa: C901
+    LOG.info("=" * 80)
+    LOG.info("🔍 Deep Sanity Check of Training Data & Masking")
+
+    num_check = 1
+
+    for i in range(num_check):
+        sample = dataset[i]
+        LOG.info(f"\n--- Sample {i} ---")
+
+        if 'text' in sample:
+            text = sample['text']
+            LOG.info(f"Raw Text Length: {len(text)} chars")
+
+            input_ids = tokenizer(text, truncation=True, max_length=max_length)["input_ids"]
+        elif 'input_ids' in sample:
+            input_ids = sample['input_ids']
+        else:
+            LOG.warning("Skipping sample: format unknown.")
+            continue
+
+        if data_collator is not None:
+            LOG.info("🧪 Testing DataCollator (Masking Check)...")
+
+            if 'input_ids' in sample:
+                batch_input = [sample]
+            else:
+                batch_input = [{"input_ids": input_ids, "attention_mask": [1] * len(input_ids)}]
+
+            try:
+                batch = data_collator(batch_input)
+
+                labels = batch["labels"][0]
+                input_ids_processed = batch["input_ids"][0]
+
+                total_tokens = len(labels)
+                masked_tokens = (labels == -100).sum().item()
+                trained_tokens = total_tokens - masked_tokens
+
+                LOG.info(
+                    f"Masking Statistics: Total={total_tokens}, Masked={masked_tokens} (Prompt), Trained={trained_tokens} (Answer)"
+                )
+
+                if masked_tokens == 0:
+                    LOG.warning(
+                        "⚠️  [CRITICAL ALERT] No tokens are masked! You are training on the Prompt/Instruction!"
+                    )
+                elif trained_tokens == 0:
+                    LOG.warning(
+                        "⚠️  [CRITICAL ALERT] All tokens are masked! The model will learn nothing.")
+                else:
+                    LOG.info("✅ Masking seems to be working (Mixed -100 and IDs).")
+
+                start_train_idx = (labels != -100).nonzero(as_tuple=True)[0]
+
+                if len(start_train_idx) > 0:
+                    idx = start_train_idx[0].item()
+
+                    context_start = max(0, idx - 20)
+                    context_end = min(total_tokens, idx + 20)
+
+                    tokens_preview = input_ids_processed[context_start:context_end]
+                    labels_preview = labels[context_start:context_end]
+
+                    LOG.info(f"\n🔍 Visualizing Prompt/Response Boundary at token index {idx}:")
+
+                    preview_text = ""
+                    for t_id, t_label in zip(tokens_preview, labels_preview):
+                        token_str = tokenizer.decode([t_id]).replace("\n", "\\n")
+                        if t_label == -100:
+                            preview_text += f"\033[90m{token_str}\033[0m"
+                        else:
+                            preview_text += f"\033[92m{token_str}\033[0m"
+
+                    LOG.info(f"(Gray=Masked, Green=Trained): ...{preview_text}...")
+                    LOG.info("(If you don't see colors: check logs directly in terminal)")
+
+            except Exception as e:
+                LOG.error(f"Failed to run data_collator check: {e}")
+
+    LOG.info("=" * 80)
