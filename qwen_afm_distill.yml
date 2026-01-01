@@ -1,8 +1,8 @@
 project_name: qwen-afm-distill
 trust_remote_code: true
-model: Qwen/Qwen3-0.6B
-output_path: outputs/models/qwen3-0.6b-student
-use_flash_attention: false
+model: Qwen/Qwen3-1.7B
+output_path: outputs/models/qwen3-1.7-student
+use_flash_attention: true
 sequence_length: 8192
 dataset:
   train_dataset:
@@ -13,7 +13,7 @@ dataset:
     split: train
   seed: 42
   format_function: leet10k_format
-  num_samples: 6000
+  num_samples: 9000
   num_eval_samples: 400
 loss_functions:
   - function: cross_entropy
@@ -26,16 +26,16 @@ loss_functions:
 layer_mapping: all
 teacher:
   kind: hf
-  path: Qwen/Qwen3-1.7B
+  path: Qwen/Qwen3-7B
   kwargs:
-    # attn_implementation: flash_attention_2
+    attn_implementation: flash_attention_2
     torch_dtype: bfloat16
 teacher_train:
-  output_path: outputs/models/qwen3-1.7b-teacher
+  output_path: outputs/models/qwen3-7b-teacher
   training_args:
     dataset_text_field: text
     packing: false
-    num_train_epochs: 3
+    num_train_epochs: 5
     per_device_train_batch_size: 1
     gradient_accumulation_steps: 8
     save_steps: 600
@@ -56,7 +56,7 @@ teacher_train:
 training_args:
   dataset_text_field: text
   packing: false
-  num_train_epochs: 3
+  num_train_epochs: 5
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 8
   save_steps: 600
