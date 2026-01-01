@@ -116,6 +116,55 @@ def load_student_model(  # noqa: C901
                 num_frozen += 1
         if num_frozen:
             print(f"Froze {num_frozen} tensors by regular expression")
+
+    # Apply LoRA if configured
+    use_lora = config.student_lora is not None
+    if use_lora:
+        lora_cfg = config.student_lora
+        assert lora_cfg is not None  # Type narrowing for type checker
+
+        # Determine target modules if not specified
+        target_modules = lora_cfg.target_modules
+        if target_modules is None:
+            # Default target modules for common architectures
+            model_type = model.config.model_type.lower()
+            if "qwen" in model_type or "llama" in model_type:
+                target_modules = [
+                    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+                ]
+            elif "mistral" in model_type:
+                target_modules = [
+                    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+                ]
+            else:
+                # Try to auto-detect attention modules
+                target_modules = []
+                for name, module in model.named_modules():
+                    if any(x in name.lower()
+                           for x in ["q_proj", "k_proj", "v_proj", "o_proj", "dense", "attention"]):
+                        if "." not in name.split(".")[-2:]:  # Avoid duplicates
+                            target_modules.append(name.split(".")[-1])
+                if not target_modules:
+                    LOG.warning(
+                        "Could not auto-detect target modules. Using default: ['q_proj', 'v_proj']")
+                    target_modules = ["q_proj", "v_proj"]
+
+        LOG.info(
+            f"Applying LoRA to student model with r={lora_cfg.r}, alpha={lora_cfg.lora_alpha}, target_modules={target_modules}"
+        )
+
+        peft_config = LoraConfig(
+            r=lora_cfg.r,
+            lora_alpha=lora_cfg.lora_alpha,
+            lora_dropout=lora_cfg.lora_dropout,
+            bias=lora_cfg.bias,
+            task_type=TaskType.CAUSAL_LM,
+            target_modules=target_modules,
+        )
+
+        model = get_peft_model(model, peft_config)
+        model.print_trainable_parameters()
+
     return model
 
 
@@ -412,10 +461,34 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
 
     resume_from_checkpoint = config.training_args.get("resume_from_checkpoint", None)
 
+    use_lora = config.student_lora is not None
+
     LOG.info("Starting training.")
     trainer.train(resume_from_checkpoint=resume_from_checkpoint, )
     LOG.info(f"Finished training. Saving model to {config.output_path}.")
-    trainer.save_model(config.output_path)
+
+    if use_lora:
+        LOG.info(f"Saving LoRA adapters to {config.output_path}/adapters.")
+        trainer.save_model(os.path.join(config.output_path, "adapters"))
+
+        LOG.info("Merging LoRA weights into base model for standalone usage...")
+
+        # Get the model from trainer before deletion
+        student_model = trainer.model.module if hasattr(trainer.model, "module") else trainer.model
+        merged_model = student_model.merge_and_unload()
+
+        del trainer
+        import gc
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        merged_model.save_pretrained(config.output_path, safe_serialization=True)
+        tokenizer.save_pretrained(config.output_path)
+
+        LOG.info(f"Done! Full model saved to {config.output_path}")
+    else:
+        trainer.save_model(config.output_path)
+
     LOG.info("Done.")
 
 

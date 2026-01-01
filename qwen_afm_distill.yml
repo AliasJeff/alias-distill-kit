@@ -3,7 +3,7 @@ trust_remote_code: true
 model: Qwen/Qwen3-1.7B
 output_path: outputs/models/qwen3-1.7-student
 use_flash_attention: true
-sequence_length: 8192
+sequence_length: 4096
 dataset:
   train_dataset:
     repo_id: QuixiAI/leet10k-alpaca
@@ -38,8 +38,8 @@ teacher_train:
   output_path: outputs/models/qwen3-8b-teacher
   lora:
     r: 8 # LoRA rank
-    lora_alpha: 16 # LoRA alpha scaling factor
-    lora_dropout: 0.05 # LoRA dropout rate
+    lora_alpha: 16
+    lora_dropout: 0.05
     # target_modules: null  # Auto-detect for Qwen models, or specify: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
     bias: "none" # LoRA bias: "none", "all", or "lora_only"
     task_type: "CAUSAL_LM"
@@ -64,6 +64,13 @@ teacher_train:
       use_reentrant: false
     push_to_hub: false
     dataset_num_proc: 16
+student_lora:
+  r: 8 # LoRA rank
+  lora_alpha: 16
+  lora_dropout: 0.05
+  # target_modules: null  # Auto-detect for Qwen models, or specify: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  bias: "none" # LoRA bias: "none", "all", or "lora_only"
+  task_type: "CAUSAL_LM"
 training_args:
   dataset_text_field: text
   packing: false

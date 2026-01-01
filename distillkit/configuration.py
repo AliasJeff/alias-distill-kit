@@ -287,6 +287,11 @@ class DistillationRunConfig(BaseModel):
         "Optional configuration block for training a teacher model separately. Used by the "
         "teacher-training CLI and ignored by the distillation-only CLI.",
     )
+    student_lora: LoRAConfig | None = Field(
+        default=None,
+        description=
+        "LoRA configuration for student model training. If None, full fine-tuning will be used.",
+    )
 
 
 class EvaluationConfig(BaseModel):
