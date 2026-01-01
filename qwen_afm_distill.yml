@@ -13,7 +13,7 @@ dataset:
     split: train
   seed: 42
   format_function: leet10k_format
-  num_samples: 9000
+  num_samples: 6000
   num_eval_samples: 400
 loss_functions:
   - function: cross_entropy
@@ -32,7 +32,6 @@ teacher:
     torch_dtype: bfloat16
 teacher_train:
   output_path: outputs/models/qwen3-8b-teacher
-  # LoRA configuration to reduce memory usage and prevent OOM
   lora:
     r: 8 # LoRA rank
     lora_alpha: 16 # LoRA alpha scaling factor
@@ -43,7 +42,7 @@ teacher_train:
   training_args:
     dataset_text_field: text
     packing: false
-    num_train_epochs: 5
+    num_train_epochs: 3
     per_device_train_batch_size: 1
     gradient_accumulation_steps: 8
     save_steps: 600
@@ -64,7 +63,7 @@ teacher_train:
 training_args:
   dataset_text_field: text
   packing: false
-  num_train_epochs: 5
+  num_train_epochs: 3
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 8
   save_steps: 600
