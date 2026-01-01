@@ -139,6 +139,34 @@ class TeacherDatasetConfig(BaseModel):
     )
 
 
+class LoRAConfig(BaseModel):
+    r: int = Field(
+        default=8,
+        description="LoRA rank (dimension of the low-rank matrices).",
+    )
+    lora_alpha: int = Field(
+        default=16,
+        description="LoRA alpha (scaling factor).",
+    )
+    lora_dropout: float = Field(
+        default=0.05,
+        description="LoRA dropout rate.",
+    )
+    target_modules: list[str] | None = Field(
+        default=None,
+        description=
+        "List of module names to apply LoRA to. If None, will use default modules for the model.",
+    )
+    bias: str = Field(
+        default="none",
+        description="LoRA bias type: 'none', 'all', or 'lora_only'.",
+    )
+    task_type: str = Field(
+        default="CAUSAL_LM",
+        description="Task type for PEFT. Usually 'CAUSAL_LM' for language models.",
+    )
+
+
 class TrainTeacherConfig(BaseModel):
     output_path: str = Field(description="Path to save the fine-tuned teacher model.", )
     training_args: dict[str, Any] = Field(
@@ -150,6 +178,11 @@ class TrainTeacherConfig(BaseModel):
         description=
         "Optional separate dataset configuration to use when training the teacher. If omitted, "
         "the main distillation dataset configuration is used.",
+    )
+    lora: LoRAConfig | None = Field(
+        default=None,
+        description=
+        "LoRA configuration for teacher training. If None, full fine-tuning will be used.",
     )
 
 

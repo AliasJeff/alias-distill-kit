@@ -9,6 +9,12 @@ import trl
 import yaml
 from accelerate import Accelerator
 
+try:
+    from peft import LoraConfig, get_peft_model, TaskType  # type: ignore
+    PEFT_AVAILABLE = True
+except ImportError:
+    PEFT_AVAILABLE = False
+
 from distillkit.compression import LogprobCompressor
 from distillkit.configuration import (
     DistillationRunConfig,
@@ -154,7 +160,7 @@ def load_tokenizer(config: DistillationRunConfig) -> transformers.PreTrainedToke
     )
 
 
-def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> None:
+def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> None:  # noqa: C901
     if not isinstance(config.teacher, TeacherModelConfig):
         raise ValueError("Teacher must be a HF model (TeacherModelConfig) for training.")
     if config.teacher_train is None:
@@ -175,6 +181,58 @@ def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> No
         trust_remote_code=config.trust_remote_code,
         **(config.teacher.kwargs or {}),
     )
+
+    # Apply LoRA if configured
+    use_lora = teacher_cfg.lora is not None
+    if use_lora:
+        if not PEFT_AVAILABLE:
+            raise ImportError(
+                "PEFT library is required for LoRA training. Install it with: pip install peft")
+
+        lora_cfg = teacher_cfg.lora
+        assert lora_cfg is not None  # Type narrowing for type checker
+
+        # Determine target modules if not specified
+        target_modules = lora_cfg.target_modules
+        if target_modules is None:
+            # Default target modules for common architectures
+            model_type = teacher_model.config.model_type.lower()
+            if "qwen" in model_type or "llama" in model_type:
+                target_modules = [
+                    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+                ]
+            elif "mistral" in model_type:
+                target_modules = [
+                    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+                ]
+            else:
+                # Try to auto-detect attention modules
+                target_modules = []
+                for name, module in teacher_model.named_modules():
+                    if any(x in name.lower()
+                           for x in ["q_proj", "k_proj", "v_proj", "o_proj", "dense", "attention"]):
+                        if "." not in name.split(".")[-2:]:  # Avoid duplicates
+                            target_modules.append(name.split(".")[-1])
+                if not target_modules:
+                    LOG.warning(
+                        "Could not auto-detect target modules. Using default: ['q_proj', 'v_proj']")
+                    target_modules = ["q_proj", "v_proj"]
+
+        LOG.info(
+            f"Applying LoRA with r={lora_cfg.r}, alpha={lora_cfg.lora_alpha}, target_modules={target_modules}"
+        )
+
+        peft_config = LoraConfig(
+            r=lora_cfg.r,
+            lora_alpha=lora_cfg.lora_alpha,
+            lora_dropout=lora_cfg.lora_dropout,
+            bias=lora_cfg.bias,
+            task_type=TaskType.CAUSAL_LM,
+            target_modules=target_modules,
+        )
+
+        teacher_model = get_peft_model(teacher_model, peft_config)
+        teacher_model.print_trainable_parameters()
 
     teacher_training_args = dict(teacher_cfg.training_args)
     dataset_kwargs = teacher_training_args.pop("dataset_kwargs", {})
@@ -217,8 +275,28 @@ def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> No
 
     LOG.info("Starting teacher training.")
     teacher_trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-    LOG.info(f"Finished teacher training. Saving teacher model to {teacher_cfg.output_path}.")
-    teacher_trainer.save_model(teacher_cfg.output_path)
+    LOG.info(f"Finished training. Saving LoRA adapters to {teacher_cfg.output_path}/adapters.")
+    teacher_trainer.save_model(os.path.join(teacher_cfg.output_path, "adapters"))
+
+    if use_lora:
+        LOG.info("Merging LoRA weights into base model for standalone usage...")
+
+        del teacher_trainer
+        import torch
+        import gc
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        merged_model = teacher_model.merge_and_unload()
+
+        final_save_path = teacher_cfg.output_path
+        merged_model.save_pretrained(final_save_path, safe_serialization=True)
+        teacher_tokenizer.save_pretrained(final_save_path)
+
+        LOG.info(f"Done! Full model saved to {final_save_path}")
+    else:
+        teacher_trainer.save_model(teacher_cfg.output_path)
+
     LOG.info("Done training teacher.")
 
     config.teacher.path = teacher_cfg.output_path
