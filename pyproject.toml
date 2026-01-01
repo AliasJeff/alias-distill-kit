@@ -26,6 +26,7 @@ dependencies = [
     "nltk>=3.8.0",
     "matplotlib",
     "peft>=0.10.0",
+    "bitsandbytes",
 ]
 
 

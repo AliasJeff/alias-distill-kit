@@ -30,6 +30,10 @@ teacher:
   kwargs:
     attn_implementation: flash_attention_2
     torch_dtype: bfloat16
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: bfloat16
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
 teacher_train:
   output_path: outputs/models/qwen3-8b-teacher
   lora:

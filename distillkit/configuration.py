@@ -124,6 +124,24 @@ class TeacherModelConfig(BaseModel):
 
     top_k: int | None = None
 
+    # BitsAndBytes quantization settings
+    load_in_4bit: bool = Field(
+        default=False,
+        description="Load teacher model in 4-bit quantization using bitsandbytes.",
+    )
+    bnb_4bit_compute_dtype: str | None = Field(
+        default=None,
+        description="Compute dtype for 4-bit quantization (e.g., 'bfloat16', 'float16').",
+    )
+    bnb_4bit_quant_type: str | None = Field(
+        default=None,
+        description="Quantization type for 4-bit (e.g., 'nf4', 'fp4').",
+    )
+    bnb_4bit_use_double_quant: bool = Field(
+        default=False,
+        description="Use double quantization for 4-bit models.",
+    )
+
 
 class TeacherDatasetConfig(BaseModel):
     kind: Literal["dataset"] = "dataset"

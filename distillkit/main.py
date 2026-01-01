@@ -8,12 +8,7 @@ import transformers
 import trl
 import yaml
 from accelerate import Accelerator
-
-try:
-    from peft import LoraConfig, get_peft_model, TaskType  # type: ignore
-    PEFT_AVAILABLE = True
-except ImportError:
-    PEFT_AVAILABLE = False
+from peft import LoraConfig, get_peft_model, TaskType
 
 from distillkit.compression import LogprobCompressor
 from distillkit.configuration import (
@@ -132,8 +127,42 @@ def create_signal_source(config: DistillationRunConfig, vocab_size: int) -> Sign
         )
         return OfflineSignalSource(compressor, vocab_size=vocab_size)
     elif isinstance(config.teacher, TeacherModelConfig):
+        teacher_kwargs = dict(config.teacher.kwargs or {})
+
+        # Setup BitsAndBytes quantization if enabled
+        if config.teacher.load_in_4bit:
+
+            quantization_config_kwargs = {}
+
+            if config.teacher.bnb_4bit_compute_dtype:
+                dtype_map = {
+                    "bfloat16": torch.bfloat16,
+                    "float16": torch.float16,
+                    "float32": torch.float32,
+                }
+                compute_dtype = dtype_map.get(config.teacher.bnb_4bit_compute_dtype.lower())
+                if compute_dtype is None:
+                    raise ValueError(
+                        f"Unsupported bnb_4bit_compute_dtype: {config.teacher.bnb_4bit_compute_dtype}. "
+                        f"Supported values: {list(dtype_map.keys())}")
+                quantization_config_kwargs["bnb_4bit_compute_dtype"] = compute_dtype
+
+            if config.teacher.bnb_4bit_quant_type:
+                quantization_config_kwargs[
+                    "bnb_4bit_quant_type"] = config.teacher.bnb_4bit_quant_type
+
+            quantization_config_kwargs[
+                "bnb_4bit_use_double_quant"] = config.teacher.bnb_4bit_use_double_quant
+
+            from transformers import BitsAndBytesConfig
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                **quantization_config_kwargs,
+            )
+            teacher_kwargs["quantization_config"] = quantization_config
+
         teacher_model = transformers.AutoModelForCausalLM.from_pretrained(
-            config.teacher.path, **(config.teacher.kwargs or {}))
+            config.teacher.path, **teacher_kwargs)
         return OnlineSignalSource(teacher_model,
                                   vocab_size=vocab_size,
                                   sparsify_top_k=config.teacher.top_k)
@@ -185,9 +214,6 @@ def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> No
     # Apply LoRA if configured
     use_lora = teacher_cfg.lora is not None
     if use_lora:
-        if not PEFT_AVAILABLE:
-            raise ImportError(
-                "PEFT library is required for LoRA training. Install it with: pip install peft")
 
         lora_cfg = teacher_cfg.lora
         assert lora_cfg is not None  # Type narrowing for type checker
