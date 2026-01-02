@@ -150,7 +150,7 @@ def calculate_chrf(
 def calculate_ast_validity(predictions: List[str], language: str = "python") -> float:
     """
     Calculates the percentage of predictions that are syntactically valid 
-    (parseable into an AST).
+    (parsable into an AST).
     Currently only supports Python using the built-in `ast` module.
     """
     if not predictions:
@@ -391,14 +391,16 @@ def evaluate_model(  # noqa: C901
     LOG.info(f"Evaluating {model_name} at {model_path}")
     results = {"model_name": model_name, "model_path": model_path}
 
-    # Load Model (supports 4bit if teacher config present)
+    # Load Model (supports 4bit if teacher config present, but never for student models)
     try:
         load_kwargs = {
             "trust_remote_code": True,
             "torch_dtype": torch.bfloat16 if eval_config.device == "cuda" else torch.float32,
             "device_map": eval_config.device,
         }
-        if teacher_config and teacher_config.load_in_4bit:
+        # Only use 4bit quantization for teacher models, never for student models
+        is_student = "student" in model_name.lower()
+        if teacher_config and teacher_config.load_in_4bit and not is_student:
             from transformers import BitsAndBytesConfig
             load_kwargs["quantization_config"] = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -483,10 +485,10 @@ def evaluate_all_models(
 
     all_results = {}
     model_configs = [
-        ("original_teacher", config.original_teacher_path, teacher_config),
-        ("trained_teacher", config.trained_teacher_path, teacher_config),
-        ("original_student", config.original_student_path, None),
         ("distilled_student", config.distilled_student_path, None),
+        ("original_student", config.original_student_path, None),
+        ("trained_teacher", config.trained_teacher_path, teacher_config),
+        ("original_teacher", config.original_teacher_path, teacher_config),
     ]
 
     for name, path, t_conf in model_configs:

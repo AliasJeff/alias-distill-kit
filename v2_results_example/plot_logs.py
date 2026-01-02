@@ -7,6 +7,7 @@ from pathlib import Path
 DISTILL_FILE = Path("distill.jsonl")
 TEACHER_FILE = Path("teacher_training.jsonl")
 EVAL_FILE = Path("evaluation_results.json")
+EVAL_METRICS = ["ppl", "bleu", "f1", "chrf", "rouge1", "rouge2", "rougeL", "ast_validity"]
 MAX_POINTS = 1000
 
 
@@ -132,7 +133,11 @@ def read_evaluation_results(file_path):
             "ppl": val["ppl"],
             "bleu": val["bleu"],
             "f1": val["f1"],
-            "rouge1": val["rouge"]["rouge1"]
+            "chrf": val["chrf"],
+            "rouge1": val["rouge"]["rouge1"],
+            "rouge2": val["rouge"]["rouge2"],
+            "rougeL": val["rouge"]["rougeL"],
+            "ast_validity": val["ast_validity"]
         }
         results.append(item)
 
@@ -224,8 +229,8 @@ def plot_grouped_metrics(models_list, title_suffix):
         print(f"[Info] No models found for {title_suffix}, skipping plot.")
         return
 
-    metric_keys = ['ppl', 'bleu', 'f1', 'rouge1']
-    metric_labels = ['PPL', 'BLEU', 'F1', 'ROUGE-1']
+    metric_keys = EVAL_METRICS
+    metric_labels = EVAL_METRICS
 
     n_metrics = len(metric_keys)
     n_models = len(models_list)
