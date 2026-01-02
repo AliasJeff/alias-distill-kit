@@ -216,10 +216,17 @@ def split_models_by_role(models_data):
     students = []
 
     for m in models_data:
-        if "teacher" in m["name"].lower():
+        name = m["name"].lower()
+        if "teacher" in name:
             teachers.append(m)
         else:
             students.append(m)
+
+    def sort_original_first(models):
+        return sorted(models, key=lambda m: 0 if "original" in m["name"].lower() else 1)
+
+    teachers = sort_original_first(teachers)
+    students = sort_original_first(students)
 
     return teachers, students
 
