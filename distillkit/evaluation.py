@@ -314,6 +314,7 @@ def generate_texts(  # noqa: C901
                             context_msgs,
                             tokenize=False,
                             add_generation_prompt=True,
+                            enable_thinking=False,
                         )
                     except Exception:
                         # Fallback manual template
