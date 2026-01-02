@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 from distillkit.configuration import (
     DatasetConfiguration,
+    DistillationRunConfig,
     EvaluationConfig,
     TeacherModelConfig,
 )
@@ -472,7 +473,7 @@ def evaluate_model(  # noqa: C901
 def evaluate_all_models(
     config: EvaluationConfig,
     dataset_config: DatasetConfiguration,
-    teacher_config: Optional[TeacherModelConfig] = None,
+    teacher_config: TeacherModelConfig,
 ) -> Dict[str, Any]:
     """Evaluate all models defined in the configuration."""
     os.makedirs(config.output_path, exist_ok=True)
@@ -506,7 +507,7 @@ def evaluate_all_models(
     return all_results
 
 
-def do_evaluate(config_path: str):
+def do_evaluate(config_path: str):  # noqa: C901
     """Main evaluation entry point."""
     with open(config_path, "r") as f:
         config_dict = yaml.safe_load(f)
@@ -525,6 +526,25 @@ def do_evaluate(config_path: str):
         original_student_path=eval_dict.get("original_student_path"),
         distilled_student_path=eval_dict.get("distilled_student_path"),
     )
+
+    distill_config = DistillationRunConfig.model_validate(config_dict)
+    # If paths in evaluation config are empty, try to get them from distillation config
+    if eval_config.original_teacher_path is None and isinstance(distill_config.teacher,
+                                                                TeacherModelConfig):
+        eval_config.original_teacher_path = distill_config.teacher.path
+
+    if eval_config.trained_teacher_path is None and distill_config.teacher_train:
+        eval_config.trained_teacher_path = distill_config.teacher_train.output_path
+
+    if eval_config.original_student_path is None:
+        eval_config.original_student_path = distill_config.train_model
+
+    if eval_config.distilled_student_path is None:
+        eval_config.distilled_student_path = distill_config.output_path
+
+    # Extract teacher config for 4bit quantization
+    if isinstance(distill_config.teacher, TeacherModelConfig):
+        teacher_config = distill_config.teacher
 
     dataset_config = DatasetConfiguration.model_validate(config_dict.get("dataset", {}))
 
@@ -547,15 +567,130 @@ def do_evaluate(config_path: str):
     LOG.info("=" * 60)
 
 
-def do_infer(
+def do_infer(  # noqa: C901
     config_path: str,
-    model_path: Optional[str],
-    num_samples: Optional[int],
-    output_path: Optional[str],
+    model_path: str | None,
+    num_samples: int | None,
+    output_path: str | None,
     batch_size: int,
     max_new_tokens: int,
 ):
-    """Inference Logic (Same as before, simplified for this snippet)."""
-    # (Existing inference logic remains largely identical, removed for brevity
-    # as the core request was about metrics update in evaluation)
-    pass
+    """Main inference logic extracted from infer_main."""
+    # Load config
+    with open(config_path, "r") as f:
+        config_dict = yaml.safe_load(f)
+
+    # Try to parse as distillation config to get dataset and model info
+    try:
+        distill_config = DistillationRunConfig.model_validate(config_dict)
+        dataset_config = distill_config.dataset
+        if model_path is None:
+            model_path = distill_config.train_model
+        if output_path is None:
+            output_path = "outputs/infer_results"
+    except Exception:
+        # If parsing fails, try to get dataset config separately
+        if "dataset" in config_dict:
+            dataset_config = DatasetConfiguration.model_validate(config_dict["dataset"])
+        else:
+            raise ValueError("Dataset configuration is required in config file")
+
+        if model_path is None:
+            if "model" in config_dict:
+                model_path = config_dict["model"]
+            elif "train_model" in config_dict:
+                model_path = config_dict["train_model"]
+            else:
+                raise ValueError("Model path must be provided via --model-path or in config file")
+
+    os.makedirs(output_path, exist_ok=True)
+    setup_file_logging(LOG, output_path, "infer.log")
+
+    LOG.info(f"Testing model: {model_path}")
+    LOG.info(f"Output path: {output_path}")
+    LOG.info(f"Number of samples: {num_samples or 'all'}")
+    LOG.info(f"Batch size: {batch_size}")
+    LOG.info(f"Max new tokens: {max_new_tokens}")
+
+    # Load tokenizer
+    LOG.info(f"Loading tokenizer from {model_path}")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+    )
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
+    # Load dataset
+    LOG.info("Loading dataset")
+    dataset, _ = load_data(dataset_config, tokenizer)
+
+    # Limit samples if specified
+    if num_samples:
+        dataset = dataset.select(range(min(num_samples, len(dataset))))
+    elif dataset_config.num_samples:
+        dataset = dataset.select(range(min(dataset_config.num_samples, len(dataset))))
+
+    LOG.info(f"Dataset size: {len(dataset)}")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Load model
+    LOG.info(f"Loading model from {model_path}")
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+    )
+
+    model.eval()
+    model = model.to(device)
+
+    # Generate texts
+    LOG.info("Starting text generation")
+    with torch.no_grad():
+        predictions, references, prompts = generate_texts(
+            model=model,
+            tokenizer=tokenizer,
+            dataset=dataset,
+            batch_size=batch_size,
+            max_length=max_new_tokens,
+            device=device,
+        )
+
+    # Save results
+    results = []
+    for i, (pred, ref, prompt) in enumerate(zip(predictions, references, prompts)):
+        results.append({
+            "sample_id": i,
+            "prompt": prompt,
+            "generated": pred,
+            "reference": ref,
+        })
+
+    output_file = os.path.join(output_path, "infer_results.json")
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
+
+    # Also save a human-readable text file
+    text_output_file = os.path.join(output_path, "infer_results.txt")
+    with open(text_output_file, "w", encoding="utf-8") as f:
+        for i, result in enumerate(results):
+            f.write(f"{'='*80}\n")
+            f.write(f"Sample {i+1}\n")
+            f.write(f"{'='*80}\n")
+            if result.get("prompt"):
+                f.write(f"Prompt:\n{result['prompt']}\n\n")
+            f.write(f"Generated:\n{result['generated']}\n\n")
+            if result.get("reference"):
+                f.write(f"Reference:\n{result['reference']}\n\n")
+            f.write("\n")
+
+    LOG.info(f"Infer results saved to {output_file}")
+    LOG.info(f"Human-readable results saved to {text_output_file}")
+    LOG.info(f"Generated {len(predictions)} samples")
+
+    # Clean up
+    del model
+    if device == "cuda":
+        torch.cuda.empty_cache()
