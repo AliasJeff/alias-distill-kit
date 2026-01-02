@@ -90,6 +90,10 @@ def calculate_ppl(
             total_loss += loss.item() * num_tokens
             total_tokens += num_tokens
 
+            # Clean up
+            del outputs, loss, input_ids, attention_mask, labels
+            torch.cuda.empty_cache()
+
     if total_tokens == 0:
         return float("inf")
 
@@ -316,12 +320,13 @@ def generate_texts(  # noqa: C901
     return predictions, references, all_prompts
 
 
-def evaluate_model(
+def evaluate_model(  # noqa: C901
     model_path: str,
     tokenizer: transformers.PreTrainedTokenizer,
     dataset: Dataset,
     eval_config: EvaluationConfig,
     model_name: str = "model",
+    teacher_config: TeacherModelConfig | None = None,
 ) -> Dict[str, Any]:
     """Evaluate a single model."""
     LOG.info(f"Evaluating {model_name} at {model_path}")
@@ -330,11 +335,54 @@ def evaluate_model(
 
     # Load Model
     try:
+        # Check if this is a teacher model and should use 4bit quantization
+        load_kwargs = {
+            "trust_remote_code": True,
+            "torch_dtype": torch.bfloat16 if eval_config.device == "cuda" else torch.float32,
+            "device_map": eval_config.device,
+        }
+
+        # Apply 4bit quantization if teacher config is provided and load_in_4bit is enabled
+        if teacher_config is not None and teacher_config.load_in_4bit:
+            quantization_config_kwargs = {}
+
+            if teacher_config.bnb_4bit_compute_dtype:
+                dtype_map = {
+                    "bfloat16": torch.bfloat16,
+                    "float16": torch.float16,
+                    "float32": torch.float32,
+                }
+                compute_dtype = dtype_map.get(teacher_config.bnb_4bit_compute_dtype.lower())
+                if compute_dtype is None:
+                    raise ValueError(
+                        f"Unsupported bnb_4bit_compute_dtype: {teacher_config.bnb_4bit_compute_dtype}. "
+                        f"Supported values: {list(dtype_map.keys())}")
+                quantization_config_kwargs["bnb_4bit_compute_dtype"] = compute_dtype
+
+            if teacher_config.bnb_4bit_quant_type:
+                quantization_config_kwargs[
+                    "bnb_4bit_quant_type"] = teacher_config.bnb_4bit_quant_type
+
+            quantization_config_kwargs[
+                "bnb_4bit_use_double_quant"] = teacher_config.bnb_4bit_use_double_quant
+
+            from transformers import BitsAndBytesConfig
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                **quantization_config_kwargs,
+            )
+            load_kwargs["quantization_config"] = quantization_config
+            # Remove torch_dtype when using 4bit quantization as it's handled by quantization_config
+            load_kwargs.pop("torch_dtype", None)
+            LOG.info(f"Loading {model_name} with 4-bit quantization")
+
+        # Merge any additional kwargs from teacher_config
+        if teacher_config is not None and teacher_config.kwargs:
+            load_kwargs.update(teacher_config.kwargs)
+
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_path,
-            trust_remote_code=True,
-            torch_dtype=torch.bfloat16 if eval_config.device == "cuda" else torch.float32,
-            device_map=eval_config.device,  # Auto map to device
+            **load_kwargs,
         )
     except Exception as e:
         LOG.error(f"Failed to load model {model_path}: {e}")
@@ -408,6 +456,7 @@ def evaluate_model(
 def evaluate_all_models(
     config: EvaluationConfig,
     dataset_config: DatasetConfiguration,
+    teacher_config: TeacherModelConfig | None = None,
 ) -> Dict[str, Any]:
     """Evaluate all models defined in the configuration."""
     os.makedirs(config.output_path, exist_ok=True)
@@ -449,13 +498,13 @@ def evaluate_all_models(
     all_results = {}
 
     model_configs = [
-        ("original_teacher", config.original_teacher_path),
-        ("trained_teacher", config.trained_teacher_path),
-        ("original_student", config.original_student_path),
-        ("distilled_student", config.distilled_student_path),
+        ("original_teacher", config.original_teacher_path, teacher_config),
+        ("trained_teacher", config.trained_teacher_path, teacher_config),
+        ("original_student", config.original_student_path, None),
+        ("distilled_student", config.distilled_student_path, None),
     ]
 
-    for name, path in model_configs:
+    for name, path, model_teacher_config in model_configs:
         if path:
             results = evaluate_model(
                 path,
@@ -463,6 +512,7 @@ def evaluate_all_models(
                 dataset,
                 config,
                 name,
+                model_teacher_config,
             )
             all_results[name] = results
 
@@ -502,6 +552,7 @@ def do_evaluate(config_path: str):  # noqa: C901
         )
 
     # If config contains distillation config, try to extract model paths from it
+    teacher_config = None
     try:
         distill_config = DistillationRunConfig.model_validate(config_dict)
         # If paths in evaluation config are empty, try to get them from distillation config
@@ -517,6 +568,10 @@ def do_evaluate(config_path: str):  # noqa: C901
 
         if eval_config.distilled_student_path is None:
             eval_config.distilled_student_path = distill_config.output_path
+
+        # Extract teacher config for 4bit quantization
+        if isinstance(distill_config.teacher, TeacherModelConfig):
+            teacher_config = distill_config.teacher
 
         # Use dataset configuration from distillation config
         dataset_config = distill_config.dataset
@@ -554,7 +609,7 @@ def do_evaluate(config_path: str):  # noqa: C901
     #     LOG.warning("Proceeding with evaluation anyway...")
 
     LOG.info("Starting evaluation")
-    results = evaluate_all_models(eval_config, dataset_config)
+    results = evaluate_all_models(eval_config, dataset_config, teacher_config)
 
     # Print summary
     LOG.info("\n" + "=" * 80)

@@ -14,7 +14,7 @@ dataset:
   seed: 42
   format_function: leet10k_format
   num_samples: 6000
-  num_eval_samples: 400
+  num_eval_samples: 200
 loss_functions:
   - function: cross_entropy
     weight: 0.3
@@ -97,8 +97,8 @@ training_args:
 evaluation:
   output_path: outputs/evaluation_results
   max_new_tokens: 2048 # Maximum length for generated text
-  batch_size: 4 # Batch size for evaluation
-  num_samples: 400 # Number of evaluation samples (None means use all)
+  batch_size: 2 # Batch size for evaluation
+  num_samples: 200 # Number of evaluation samples (None means use all)
   device: cuda # Device: cuda or cpu
   # The following paths will be automatically extracted from the config above if not specified
   # original_teacher_path: Qwen/Qwen3-1.7B  # Original teacher model path (defaults to teacher.path)
