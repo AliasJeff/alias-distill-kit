@@ -65,8 +65,8 @@ def calculate_ppl(
     total_tokens = 0
 
     with torch.no_grad():
-        for i in tqdm(range(0, len(dataset), batch_size), desc="Calculating PPL"):
-            batch = dataset[i:i + batch_size]
+        for i in tqdm(range(0, len(dataset), 4), desc="Calculating PPL"):
+            batch = dataset[i:i + 4]
 
             # Process input
             if "input_ids" in batch:
