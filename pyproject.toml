@@ -28,6 +28,8 @@ dependencies = [
     "matplotlib",
     "peft>=0.10.0",
     "bitsandbytes",
+    "tree-sitter>=0.24.0",
+    "tree-sitter-python>=0.24.0",
 ]
 
 

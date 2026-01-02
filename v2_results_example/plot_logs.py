@@ -141,20 +141,32 @@ def read_evaluation_results(file_path):
 
 
 def downsample_data(data, max_points):
+    """
+    Downsamples data to a fixed number of points using linear spacing.
+    Ensures exactly 'max_points' are returned, preserving start and end.
+    """
     if data is None: return None
+
     total_points = len(data["step"])
+
+    # If we have fewer points than the limit, no need to downsample
     if total_points <= max_points:
         return data
 
-    stride = total_points // max_points
-    indices = list(range(0, total_points, stride))
-    if indices[-1] != total_points - 1:
-        indices.append(total_points - 1)
+    print(f"  -> Downsampling: {total_points} points to {max_points}")
 
-    print(f"  -> Downsampling: {total_points} points to {len(indices)}")
+    # Generate evenly spaced integer indices
+    # linspace generates floats, so we cast to int (forcing unique indices)
+    indices = np.linspace(0, total_points - 1, max_points).astype(int)
+
+    # Ensure indices are unique (just in case total_points is close to max_points)
+    indices = np.unique(indices)
+
     new_data = {}
     for key, val_list in data.items():
+        # Use numpy array indexing for speed if possible, otherwise list comp
         new_data[key] = [val_list[i] for i in indices]
+
     return new_data
 
 

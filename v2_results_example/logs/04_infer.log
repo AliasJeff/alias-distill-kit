@@ -1,0 +1,52 @@
+nohup: ignoring input
+Using the `WANDB_DISABLED` environment variable is deprecated and will be removed in v5. Use the --report_to flag to control the integrations used for logging result (for instance --report_to none).
+INFO:distillkit.evaluation:✅ Log file successfully attached to: outputs/infer_results/infer.log
+INFO:distillkit.evaluation:Testing model: outputs/models/qwen3-1.7b-student
+INFO:distillkit.evaluation:Output path: outputs/infer_results
+INFO:distillkit.evaluation:Number of samples: 3
+INFO:distillkit.evaluation:Batch size: 8
+INFO:distillkit.evaluation:Max new tokens: 2048
+INFO:distillkit.evaluation:Loading tokenizer from outputs/models/qwen3-1.7b-student
+Traceback (most recent call last):
+  File "/root/miniconda3/lib/python3.10/site-packages/transformers/utils/hub.py", line 479, in cached_files
+    hf_hub_download(
+  File "/root/miniconda3/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 106, in _inner_fn
+    validate_repo_id(arg_value)
+  File "/root/miniconda3/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 154, in validate_repo_id
+    raise HFValidationError(
+huggingface_hub.errors.HFValidationError: Repo id must be in the form 'repo_name' or 'namespace/repo_name': 'outputs/models/qwen3-1.7b-student'. Use `repo_type` argument if needed.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/root/miniconda3/bin/infer", line 8, in <module>
+    sys.exit(infer_main())
+  File "/root/miniconda3/lib/python3.10/site-packages/click/core.py", line 1485, in __call__
+    return self.main(*args, **kwargs)
+  File "/root/miniconda3/lib/python3.10/site-packages/click/core.py", line 1406, in main
+    rv = self.invoke(ctx)
+  File "/root/miniconda3/lib/python3.10/site-packages/click/core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+  File "/root/miniconda3/lib/python3.10/site-packages/click/core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+  File "/root/autodl-tmp/alias-distill-kit/distillkit/main.py", line 639, in infer_main
+    do_infer(
+  File "/root/autodl-tmp/alias-distill-kit/distillkit/evaluation.py", line 682, in do_infer
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+  File "/root/miniconda3/lib/python3.10/site-packages/transformers/models/auto/tokenization_auto.py", line 1089, in from_pretrained
+    tokenizer_config = get_tokenizer_config(pretrained_model_name_or_path, **kwargs)
+  File "/root/miniconda3/lib/python3.10/site-packages/transformers/models/auto/tokenization_auto.py", line 921, in get_tokenizer_config
+    resolved_config_file = cached_file(
+  File "/root/miniconda3/lib/python3.10/site-packages/transformers/utils/hub.py", line 322, in cached_file
+    file = cached_files(path_or_repo_id=path_or_repo_id, filenames=[filename], **kwargs)
+  File "/root/miniconda3/lib/python3.10/site-packages/transformers/utils/hub.py", line 531, in cached_files
+    resolved_files = [
+  File "/root/miniconda3/lib/python3.10/site-packages/transformers/utils/hub.py", line 532, in <listcomp>
+    _get_cache_file_to_return(path_or_repo_id, filename, cache_dir, revision, repo_type)
+  File "/root/miniconda3/lib/python3.10/site-packages/transformers/utils/hub.py", line 143, in _get_cache_file_to_return
+    resolved_file = try_to_load_from_cache(
+  File "/root/miniconda3/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 106, in _inner_fn
+    validate_repo_id(arg_value)
+  File "/root/miniconda3/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 154, in validate_repo_id
+    raise HFValidationError(
+huggingface_hub.errors.HFValidationError: Repo id must be in the form 'repo_name' or 'namespace/repo_name': 'outputs/models/qwen3-1.7b-student'. Use `repo_type` argument if needed.
