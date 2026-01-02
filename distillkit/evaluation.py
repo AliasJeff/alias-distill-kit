@@ -179,30 +179,22 @@ def calculate_ast_validity(predictions: List[str], language: str = "python") -> 
 def calculate_codebleu_score(predictions: List[str],
                              references: List[str],
                              language: str = "python") -> Dict[str, float]:
-    """
-    Calculate CodeBLEU score.
-    CodeBLEU = Weighted combination of N-gram match, Weighted N-gram match (keywords),
-               AST match (syntactic structure), and Data-flow match (semantic variables).
-    """
 
     if not predictions or not references:
         return {"codebleu": 0.0}
 
-    # Ensure inputs are clean strings (stripping markdown) for better parsing
     clean_preds = [clean_code_generation(p) for p in predictions]
     clean_refs = [clean_code_generation(r) for r in references]
 
     try:
-        # Note: The 'tokenizer' arg might be required by some versions of codebleu,
-        # but the standard package often defaults well.
         result = calc_codebleu(references=clean_refs,
                                predictions=clean_preds,
                                lang=language,
-                               weights=(0.25, 0.25, 0.25, 0.25),
-                               tokenizer=None)
+                               weights=(0.25, 0.25, 0.25, 0.25))
         return result
     except Exception as e:
-        LOG.error(f"Error calculating CodeBLEU: {e}")
+        import traceback
+        LOG.error(f"Error calculating CodeBLEU: {e}\n{traceback.format_exc()}")
         return {"codebleu": 0.0}
 
 
