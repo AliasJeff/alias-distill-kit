@@ -479,7 +479,8 @@ def evaluate_all_models(
     setup_file_logging(LOG, config.output_path, "evaluation.log")
 
     tokenizer_path = (config.original_teacher_path or config.trained_teacher_path
-                      or config.original_student_path or config.distilled_student_path)
+                      or config.original_student_path or config.distilled_student_path
+                      or teacher_config.path)
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
     if tokenizer.pad_token_id is None: tokenizer.pad_token_id = tokenizer.eos_token_id
