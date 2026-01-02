@@ -478,9 +478,7 @@ def evaluate_all_models(
     os.makedirs(config.output_path, exist_ok=True)
     setup_file_logging(LOG, config.output_path, "evaluation.log")
 
-    tokenizer_path = (config.original_teacher_path or config.trained_teacher_path
-                      or config.original_student_path or config.distilled_student_path
-                      or teacher_config.path)
+    tokenizer_path = config.tokenizer_path
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
     if tokenizer.pad_token_id is None: tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -521,6 +519,7 @@ def do_evaluate(config_path: str):
         batch_size=eval_dict.get("batch_size", 4),
         num_samples=eval_dict.get("num_samples"),
         device=eval_dict.get("device", "cuda"),
+        tokenizer_path=eval_dict.get("tokenizer_path"),
         original_teacher_path=eval_dict.get("original_teacher_path"),
         trained_teacher_path=eval_dict.get("trained_teacher_path"),
         original_student_path=eval_dict.get("original_student_path"),
@@ -529,8 +528,10 @@ def do_evaluate(config_path: str):
 
     dataset_config = DatasetConfiguration.model_validate(config_dict.get("dataset", {}))
 
+    teacher_config = TeacherModelConfig.model_validate(config_dict.get("teacher", {}))
+
     # Run Evaluation
-    results = evaluate_all_models(eval_config, dataset_config)
+    results = evaluate_all_models(eval_config, dataset_config, teacher_config)
 
     # Print Summary
     LOG.info("=" * 60)

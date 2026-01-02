@@ -300,6 +300,10 @@ class EvaluationConfig(BaseModel):
         description=
         "Path to the original teacher model. If None, will use teacher.path from config.",
     )
+    tokenizer_path: str = Field(
+        default="",
+        description="Path to the tokenizer.",
+    )
     trained_teacher_path: str | None = Field(
         default=None,
         description=

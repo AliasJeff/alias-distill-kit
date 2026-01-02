@@ -96,6 +96,7 @@ training_args:
 # Evaluation configuration
 evaluation:
   output_path: outputs/evaluation_results
+  tokenizer_path: Qwen/Qwen3-8B
   max_new_tokens: 2048 # Maximum length for generated text
   batch_size: 6 # Batch size for evaluation
   num_samples: 200 # Number of evaluation samples (None means use all)
