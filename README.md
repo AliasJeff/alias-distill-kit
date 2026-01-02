@@ -1,10 +1,14 @@
 - train-teacher qwen_afm_distill.yml -v
-- nohup train-teacher qwen_afm_distill.yml -v > logs/train-teacher.log 2>&1 &
 - distill qwen_afm_distill.yml -v
-- infer qwen_afm_distill.yml --num-samples 3 --model-path outputs/models/qwen3-1.7b-teacher -v --max-new-tokens 2048
+- evaluate qwen_afm_distill.yml -v
+- infer qwen_afm_distill.yml --num-samples 3 --model-path outputs/models/qwen3-1.7b-student -v --max-new-tokens 2048
 
-nohup ./run_all.sh > logs/run_all.log 2>&1 &
+- nohup train-teacher qwen_afm_distill.yml -v > logs/01_train_teacher.log 2>&1 &
+- nohup distill qwen_afm_distill.yml -v > logs/02_distill.log 2>&1 &
+- nohup evaluate qwen_afm_distill.yml -v > logs/03_evaluate.log 2>&1 &
+- nohup infer qwen_afm_distill.yml --num-samples 3 --model-path outputs/models/qwen3-1.7b-student -v --max-new-tokens 2048 > logs/04_infer.log 2>&1 &
 
+- nohup ./run_all.sh > logs/run_all.log 2>&1 &
 
 # DistillKit
 

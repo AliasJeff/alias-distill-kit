@@ -22,9 +22,14 @@ dependencies = [
     "wandb",
     "tqdm",
     "sacrebleu>=2.3.0",
+    "codebleu>=0.2.0",
     "rouge-score>=0.1.2",
     "nltk>=3.8.0",
     "matplotlib",
+    "peft>=0.10.0",
+    "bitsandbytes",
+    "tree-sitter>=0.24.0",
+    "tree-sitter-python>=0.24.0",
 ]
 
 

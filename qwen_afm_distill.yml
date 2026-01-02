@@ -3,7 +3,7 @@ trust_remote_code: true
 model: Qwen/Qwen3-1.7B
 output_path: outputs/models/qwen3-1.7-student
 use_flash_attention: true
-sequence_length: 8192
+sequence_length: 4096
 dataset:
   train_dataset:
     repo_id: QuixiAI/leet10k-alpaca
@@ -13,8 +13,8 @@ dataset:
     split: train
   seed: 42
   format_function: leet10k_format
-  num_samples: 9000
-  num_eval_samples: 400
+  num_samples: 6000
+  num_eval_samples: 200
 loss_functions:
   - function: cross_entropy
     weight: 0.3
@@ -26,16 +26,27 @@ loss_functions:
 layer_mapping: all
 teacher:
   kind: hf
-  path: Qwen/Qwen3-7B
+  path: Qwen/Qwen3-8B
   kwargs:
     attn_implementation: flash_attention_2
     torch_dtype: bfloat16
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: bfloat16
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
 teacher_train:
-  output_path: outputs/models/qwen3-7b-teacher
+  output_path: outputs/models/qwen3-8b-teacher
+  lora:
+    r: 8 # LoRA rank
+    lora_alpha: 16
+    lora_dropout: 0.05
+    # target_modules: null  # Auto-detect for Qwen models, or specify: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    bias: "none" # LoRA bias: "none", "all", or "lora_only"
+    task_type: "CAUSAL_LM"
   training_args:
     dataset_text_field: text
     packing: false
-    num_train_epochs: 5
+    num_train_epochs: 3
     per_device_train_batch_size: 1
     gradient_accumulation_steps: 8
     save_steps: 600
@@ -53,10 +64,17 @@ teacher_train:
       use_reentrant: false
     push_to_hub: false
     dataset_num_proc: 16
+student_lora:
+  r: 8 # LoRA rank
+  lora_alpha: 16
+  lora_dropout: 0.05
+  # target_modules: null  # Auto-detect for Qwen models, or specify: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  bias: "none" # LoRA bias: "none", "all", or "lora_only"
+  task_type: "CAUSAL_LM"
 training_args:
   dataset_text_field: text
   packing: false
-  num_train_epochs: 5
+  num_train_epochs: 3
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 8
   save_steps: 600
@@ -78,9 +96,10 @@ training_args:
 # Evaluation configuration
 evaluation:
   output_path: outputs/evaluation_results
+  tokenizer_path: Qwen/Qwen3-8B
   max_new_tokens: 2048 # Maximum length for generated text
-  batch_size: 4 # Batch size for evaluation
-  num_samples: 400 # Number of evaluation samples (None means use all)
+  batch_size: 12 # Batch size for evaluation
+  num_samples: 200 # Number of evaluation samples (None means use all)
   device: cuda # Device: cuda or cpu
   # The following paths will be automatically extracted from the config above if not specified
   # original_teacher_path: Qwen/Qwen3-1.7B  # Original teacher model path (defaults to teacher.path)

@@ -7,6 +7,7 @@ from pathlib import Path
 DISTILL_FILE = Path("distill.jsonl")
 TEACHER_FILE = Path("teacher_training.jsonl")
 EVAL_FILE = Path("evaluation_results.json")
+EVAL_METRICS = ["ppl", "bleu", "f1", "chrf", "rouge1", "rouge2", "rougeL", "ast_validity"]
 MAX_POINTS = 1000
 
 
@@ -132,7 +133,11 @@ def read_evaluation_results(file_path):
             "ppl": val["ppl"],
             "bleu": val["bleu"],
             "f1": val["f1"],
-            "rouge1": val["rouge"]["rouge1"]
+            "chrf": val["chrf"],
+            "rouge1": val["rouge"]["rouge1"],
+            "rouge2": val["rouge"]["rouge2"],
+            "rougeL": val["rouge"]["rougeL"],
+            "ast_validity": val["ast_validity"]
         }
         results.append(item)
 
@@ -141,20 +146,32 @@ def read_evaluation_results(file_path):
 
 
 def downsample_data(data, max_points):
+    """
+    Downsamples data to a fixed number of points using linear spacing.
+    Ensures exactly 'max_points' are returned, preserving start and end.
+    """
     if data is None: return None
+
     total_points = len(data["step"])
+
+    # If we have fewer points than the limit, no need to downsample
     if total_points <= max_points:
         return data
 
-    stride = total_points // max_points
-    indices = list(range(0, total_points, stride))
-    if indices[-1] != total_points - 1:
-        indices.append(total_points - 1)
+    print(f"  -> Downsampling: {total_points} points to {max_points}")
 
-    print(f"  -> Downsampling: {total_points} points to {len(indices)}")
+    # Generate evenly spaced integer indices
+    # linspace generates floats, so we cast to int (forcing unique indices)
+    indices = np.linspace(0, total_points - 1, max_points).astype(int)
+
+    # Ensure indices are unique (just in case total_points is close to max_points)
+    indices = np.unique(indices)
+
     new_data = {}
     for key, val_list in data.items():
+        # Use numpy array indexing for speed if possible, otherwise list comp
         new_data[key] = [val_list[i] for i in indices]
+
     return new_data
 
 
@@ -199,10 +216,17 @@ def split_models_by_role(models_data):
     students = []
 
     for m in models_data:
-        if "teacher" in m["name"].lower():
+        name = m["name"].lower()
+        if "teacher" in name:
             teachers.append(m)
         else:
             students.append(m)
+
+    def sort_original_first(models):
+        return sorted(models, key=lambda m: 0 if "original" in m["name"].lower() else 1)
+
+    teachers = sort_original_first(teachers)
+    students = sort_original_first(students)
 
     return teachers, students
 
@@ -212,8 +236,8 @@ def plot_grouped_metrics(models_list, title_suffix):
         print(f"[Info] No models found for {title_suffix}, skipping plot.")
         return
 
-    metric_keys = ['ppl', 'bleu', 'f1', 'rouge1']
-    metric_labels = ['PPL', 'BLEU', 'F1', 'ROUGE-1']
+    metric_keys = EVAL_METRICS
+    metric_labels = EVAL_METRICS
 
     n_metrics = len(metric_keys)
     n_models = len(models_list)

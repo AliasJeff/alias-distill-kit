@@ -8,6 +8,7 @@ import transformers
 import trl
 import yaml
 from accelerate import Accelerator
+from peft import LoraConfig, get_peft_model, TaskType
 
 from distillkit.compression import LogprobCompressor
 from distillkit.configuration import (
@@ -115,6 +116,55 @@ def load_student_model(  # noqa: C901
                 num_frozen += 1
         if num_frozen:
             print(f"Froze {num_frozen} tensors by regular expression")
+
+    # Apply LoRA if configured
+    use_lora = config.student_lora is not None
+    if use_lora:
+        lora_cfg = config.student_lora
+        assert lora_cfg is not None  # Type narrowing for type checker
+
+        # Determine target modules if not specified
+        target_modules = lora_cfg.target_modules
+        if target_modules is None:
+            # Default target modules for common architectures
+            model_type = model.config.model_type.lower()
+            if "qwen" in model_type or "llama" in model_type:
+                target_modules = [
+                    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+                ]
+            elif "mistral" in model_type:
+                target_modules = [
+                    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+                ]
+            else:
+                # Try to auto-detect attention modules
+                target_modules = []
+                for name, module in model.named_modules():
+                    if any(x in name.lower()
+                           for x in ["q_proj", "k_proj", "v_proj", "o_proj", "dense", "attention"]):
+                        if "." not in name.split(".")[-2:]:  # Avoid duplicates
+                            target_modules.append(name.split(".")[-1])
+                if not target_modules:
+                    LOG.warning(
+                        "Could not auto-detect target modules. Using default: ['q_proj', 'v_proj']")
+                    target_modules = ["q_proj", "v_proj"]
+
+        LOG.info(
+            f"Applying LoRA to student model with r={lora_cfg.r}, alpha={lora_cfg.lora_alpha}, target_modules={target_modules}"
+        )
+
+        peft_config = LoraConfig(
+            r=lora_cfg.r,
+            lora_alpha=lora_cfg.lora_alpha,
+            lora_dropout=lora_cfg.lora_dropout,
+            bias=lora_cfg.bias,
+            task_type=TaskType.CAUSAL_LM,
+            target_modules=target_modules,
+        )
+
+        model = get_peft_model(model, peft_config)
+        model.print_trainable_parameters()
+
     return model
 
 
@@ -126,8 +176,42 @@ def create_signal_source(config: DistillationRunConfig, vocab_size: int) -> Sign
         )
         return OfflineSignalSource(compressor, vocab_size=vocab_size)
     elif isinstance(config.teacher, TeacherModelConfig):
+        teacher_kwargs = dict(config.teacher.kwargs or {})
+
+        # Setup BitsAndBytes quantization if enabled
+        if config.teacher.load_in_4bit:
+
+            quantization_config_kwargs = {}
+
+            if config.teacher.bnb_4bit_compute_dtype:
+                dtype_map = {
+                    "bfloat16": torch.bfloat16,
+                    "float16": torch.float16,
+                    "float32": torch.float32,
+                }
+                compute_dtype = dtype_map.get(config.teacher.bnb_4bit_compute_dtype.lower())
+                if compute_dtype is None:
+                    raise ValueError(
+                        f"Unsupported bnb_4bit_compute_dtype: {config.teacher.bnb_4bit_compute_dtype}. "
+                        f"Supported values: {list(dtype_map.keys())}")
+                quantization_config_kwargs["bnb_4bit_compute_dtype"] = compute_dtype
+
+            if config.teacher.bnb_4bit_quant_type:
+                quantization_config_kwargs[
+                    "bnb_4bit_quant_type"] = config.teacher.bnb_4bit_quant_type
+
+            quantization_config_kwargs[
+                "bnb_4bit_use_double_quant"] = config.teacher.bnb_4bit_use_double_quant
+
+            from transformers import BitsAndBytesConfig
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                **quantization_config_kwargs,
+            )
+            teacher_kwargs["quantization_config"] = quantization_config
+
         teacher_model = transformers.AutoModelForCausalLM.from_pretrained(
-            config.teacher.path, **(config.teacher.kwargs or {}))
+            config.teacher.path, **teacher_kwargs)
         return OnlineSignalSource(teacher_model,
                                   vocab_size=vocab_size,
                                   sparsify_top_k=config.teacher.top_k)
@@ -154,7 +238,7 @@ def load_tokenizer(config: DistillationRunConfig) -> transformers.PreTrainedToke
     )
 
 
-def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> None:
+def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> None:  # noqa: C901
     if not isinstance(config.teacher, TeacherModelConfig):
         raise ValueError("Teacher must be a HF model (TeacherModelConfig) for training.")
     if config.teacher_train is None:
@@ -175,6 +259,55 @@ def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> No
         trust_remote_code=config.trust_remote_code,
         **(config.teacher.kwargs or {}),
     )
+
+    # Apply LoRA if configured
+    use_lora = teacher_cfg.lora is not None
+    if use_lora:
+
+        lora_cfg = teacher_cfg.lora
+        assert lora_cfg is not None  # Type narrowing for type checker
+
+        # Determine target modules if not specified
+        target_modules = lora_cfg.target_modules
+        if target_modules is None:
+            # Default target modules for common architectures
+            model_type = teacher_model.config.model_type.lower()
+            if "qwen" in model_type or "llama" in model_type:
+                target_modules = [
+                    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+                ]
+            elif "mistral" in model_type:
+                target_modules = [
+                    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+                ]
+            else:
+                # Try to auto-detect attention modules
+                target_modules = []
+                for name, module in teacher_model.named_modules():
+                    if any(x in name.lower()
+                           for x in ["q_proj", "k_proj", "v_proj", "o_proj", "dense", "attention"]):
+                        if "." not in name.split(".")[-2:]:  # Avoid duplicates
+                            target_modules.append(name.split(".")[-1])
+                if not target_modules:
+                    LOG.warning(
+                        "Could not auto-detect target modules. Using default: ['q_proj', 'v_proj']")
+                    target_modules = ["q_proj", "v_proj"]
+
+        LOG.info(
+            f"Applying LoRA with r={lora_cfg.r}, alpha={lora_cfg.lora_alpha}, target_modules={target_modules}"
+        )
+
+        peft_config = LoraConfig(
+            r=lora_cfg.r,
+            lora_alpha=lora_cfg.lora_alpha,
+            lora_dropout=lora_cfg.lora_dropout,
+            bias=lora_cfg.bias,
+            task_type=TaskType.CAUSAL_LM,
+            target_modules=target_modules,
+        )
+
+        teacher_model = get_peft_model(teacher_model, peft_config)
+        teacher_model.print_trainable_parameters()
 
     teacher_training_args = dict(teacher_cfg.training_args)
     dataset_kwargs = teacher_training_args.pop("dataset_kwargs", {})
@@ -217,8 +350,28 @@ def train_teacher(config: DistillationRunConfig, accelerator: Accelerator) -> No
 
     LOG.info("Starting teacher training.")
     teacher_trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-    LOG.info(f"Finished teacher training. Saving teacher model to {teacher_cfg.output_path}.")
-    teacher_trainer.save_model(teacher_cfg.output_path)
+    LOG.info(f"Finished training. Saving LoRA adapters to {teacher_cfg.output_path}/adapters.")
+    teacher_trainer.save_model(os.path.join(teacher_cfg.output_path, "adapters"))
+
+    if use_lora:
+        LOG.info("Merging LoRA weights into base model for standalone usage...")
+
+        del teacher_trainer
+        import torch
+        import gc
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        merged_model = teacher_model.merge_and_unload()
+
+        final_save_path = teacher_cfg.output_path
+        merged_model.save_pretrained(final_save_path, safe_serialization=True)
+        teacher_tokenizer.save_pretrained(final_save_path)
+
+        LOG.info(f"Done! Full model saved to {final_save_path}")
+    else:
+        teacher_trainer.save_model(teacher_cfg.output_path)
+
     LOG.info("Done training teacher.")
 
     config.teacher.path = teacher_cfg.output_path
@@ -308,10 +461,34 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
 
     resume_from_checkpoint = config.training_args.get("resume_from_checkpoint", None)
 
+    use_lora = config.student_lora is not None
+
     LOG.info("Starting training.")
     trainer.train(resume_from_checkpoint=resume_from_checkpoint, )
     LOG.info(f"Finished training. Saving model to {config.output_path}.")
-    trainer.save_model(config.output_path)
+
+    if use_lora:
+        LOG.info(f"Saving LoRA adapters to {config.output_path}/adapters.")
+        trainer.save_model(os.path.join(config.output_path, "adapters"))
+
+        LOG.info("Merging LoRA weights into base model for standalone usage...")
+
+        # Get the model from trainer before deletion
+        student_model = trainer.model.module if hasattr(trainer.model, "module") else trainer.model
+        merged_model = student_model.merge_and_unload()
+
+        del trainer
+        import gc
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        merged_model.save_pretrained(config.output_path, safe_serialization=True)
+        tokenizer.save_pretrained(config.output_path)
+
+        LOG.info(f"Done! Full model saved to {config.output_path}")
+    else:
+        trainer.save_model(config.output_path)
+
     LOG.info("Done.")
 
 

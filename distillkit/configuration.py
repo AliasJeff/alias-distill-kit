@@ -124,6 +124,24 @@ class TeacherModelConfig(BaseModel):
 
     top_k: int | None = None
 
+    # BitsAndBytes quantization settings
+    load_in_4bit: bool = Field(
+        default=False,
+        description="Load teacher model in 4-bit quantization using bitsandbytes.",
+    )
+    bnb_4bit_compute_dtype: str | None = Field(
+        default=None,
+        description="Compute dtype for 4-bit quantization (e.g., 'bfloat16', 'float16').",
+    )
+    bnb_4bit_quant_type: str | None = Field(
+        default=None,
+        description="Quantization type for 4-bit (e.g., 'nf4', 'fp4').",
+    )
+    bnb_4bit_use_double_quant: bool = Field(
+        default=False,
+        description="Use double quantization for 4-bit models.",
+    )
+
 
 class TeacherDatasetConfig(BaseModel):
     kind: Literal["dataset"] = "dataset"
@@ -139,6 +157,34 @@ class TeacherDatasetConfig(BaseModel):
     )
 
 
+class LoRAConfig(BaseModel):
+    r: int = Field(
+        default=8,
+        description="LoRA rank (dimension of the low-rank matrices).",
+    )
+    lora_alpha: int = Field(
+        default=16,
+        description="LoRA alpha (scaling factor).",
+    )
+    lora_dropout: float = Field(
+        default=0.05,
+        description="LoRA dropout rate.",
+    )
+    target_modules: list[str] | None = Field(
+        default=None,
+        description=
+        "List of module names to apply LoRA to. If None, will use default modules for the model.",
+    )
+    bias: str = Field(
+        default="none",
+        description="LoRA bias type: 'none', 'all', or 'lora_only'.",
+    )
+    task_type: str = Field(
+        default="CAUSAL_LM",
+        description="Task type for PEFT. Usually 'CAUSAL_LM' for language models.",
+    )
+
+
 class TrainTeacherConfig(BaseModel):
     output_path: str = Field(description="Path to save the fine-tuned teacher model.", )
     training_args: dict[str, Any] = Field(
@@ -150,6 +196,11 @@ class TrainTeacherConfig(BaseModel):
         description=
         "Optional separate dataset configuration to use when training the teacher. If omitted, "
         "the main distillation dataset configuration is used.",
+    )
+    lora: LoRAConfig | None = Field(
+        default=None,
+        description=
+        "LoRA configuration for teacher training. If None, full fine-tuning will be used.",
     )
 
 
@@ -236,6 +287,11 @@ class DistillationRunConfig(BaseModel):
         "Optional configuration block for training a teacher model separately. Used by the "
         "teacher-training CLI and ignored by the distillation-only CLI.",
     )
+    student_lora: LoRAConfig | None = Field(
+        default=None,
+        description=
+        "LoRA configuration for student model training. If None, full fine-tuning will be used.",
+    )
 
 
 class EvaluationConfig(BaseModel):
@@ -243,6 +299,10 @@ class EvaluationConfig(BaseModel):
         default=None,
         description=
         "Path to the original teacher model. If None, will use teacher.path from config.",
+    )
+    tokenizer_path: str = Field(
+        default="",
+        description="Path to the tokenizer.",
     )
     trained_teacher_path: str | None = Field(
         default=None,
